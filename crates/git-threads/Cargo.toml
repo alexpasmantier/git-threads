@@ -3,6 +3,7 @@ name = "git-threads"
 description = "Anchored, threaded discussions stored in git — portable review conversations, annotations, and archaeology"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]
