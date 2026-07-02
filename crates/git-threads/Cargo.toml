@@ -1,0 +1,11 @@
+[package]
+name = "git-threads"
+description = "Anchored, threaded discussions stored in git — portable review conversations, annotations, and archaeology"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-threads-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
