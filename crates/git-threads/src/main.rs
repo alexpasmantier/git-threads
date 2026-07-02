@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use git_threads::commands;
 
 #[derive(Parser)]
 #[command(name = "git-threads", version, about = "Anchored, threaded discussions stored in git")]
@@ -9,13 +10,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Configure this clone for git-threads (refspecs, initial fetch)
-    Init,
+    /// Configure this clone for git-threads (fetch refspec, initial fetch)
+    Init {
+        /// Remote to configure
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+    /// List threads with their current state
+    List,
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Init => anyhow::bail!("not implemented yet"),
+    match Cli::parse().command {
+        Command::Init { remote } => commands::init(&remote),
+        Command::List => commands::list(),
     }
 }
