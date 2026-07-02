@@ -163,10 +163,13 @@ Do not pre-compress or binary-encode anything: git packfiles (zlib + delta chain
 
 ### 7.1 Configuration (per clone, written by `init`)
 
+`init` adds a single fetch refspec to the shared remote:
+
 ```
 fetch = +refs/threads/*:refs/threads/*
-push  = refs/threads/data:refs/threads/data
 ```
+
+Fetch refspecs are additive, so this augments normal fetches. No push refspec is configured: setting `remote.<name>.push` *replaces* git's default push behavior for the clone (a bare `git push` would stop pushing the current branch). Publishing instead pushes explicitly — `git push <remote> refs/threads/data:refs/threads/data` — as part of the publish loop (§7.2).
 
 Tools MUST self-heal this configuration (git config and hooks are per-clone by design; "install the tool, run any command once" is the setup floor — the git-lfs pattern).
 
