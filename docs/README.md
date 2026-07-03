@@ -12,10 +12,10 @@ into the spec and code:
   forward compatibility.
 - **[The state fold](state-fold.md)** — how append-only events deterministically become
   conversation state: edit chains, tombstones, ties, orphans.
-- **[Storage](storage.md)** — the snapshot tree on `refs/threads/data`, batched writes,
-  retention parents, why bodies are inline, scaling.
-- **[Synchronization](sync.md)** — the refspec design, the publish loop, the conflict-free
-  union merge, hosting behavior.
+- **[Storage](storage.md)** — the snapshot tree on `refs/threads/data`, the drafts staging
+  ref and session batching, retention parents, why bodies are inline, scaling.
+- **[Synchronization](sync.md)** — the refspec design, the commit/push split and the publish
+  loop, the conflict-free union merge, hosting behavior.
 - **[Re-anchoring](reanchoring.md)** — snippets, the four-rung ladder, fuzz semantics,
   ambiguity rules, and its behavior on this repo's own history.
 

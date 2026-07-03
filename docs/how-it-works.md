@@ -152,24 +152,35 @@ who has the same set of events computes exactly the same conversation, no matter
 the events arrived in. That property is what lets synchronization (next section) be so simple —
 two people's events just get pooled together, and the fold sorts out the rest.
 
+## Drafts: nothing is shared until you say so
+
+Everything you write starts as a **draft** — stored locally (on a hidden staging pointer of
+its own, `refs/threads/drafts`), visible in your `list` and `show` with a draft marker, and
+still retractable with `discard`. When the review session is done, `git threads commit` seals
+all drafts into your local discussion history as **one batch** ("threads: 14 events in 5
+threads"), however many commands produced them. That works offline; nothing has left your
+machine yet. Sharing is the separate, explicit step below — the same rhythm as code:
+edit → `commit` → `push`.
+
 ## Syncing: how discussions travel
 
 Discussions move between people the same way code does: push and fetch. But git-threads never
 lets a fetch stomp on your local data. Fetched remote state lands in a separate **tracking
 pointer** (`refs/threads/remotes/origin/data` — same idea as `origin/main` for branches), and
-is then explicitly _integrated_ into your local data. Publishing is a three-step loop:
+is then explicitly _integrated_ into your local data. `git threads push` runs a three-step
+loop:
 
 ```mermaid
 sequenceDiagram
     participant B as Bob's clone
     participant R as shared remote
     participant A as Alice's clone
-    Note over A,R: Alice publishes her comments first
+    Note over A,R: Alice commits her drafts and pushes first
     A->>R: push refs/threads/data ✓
-    Note over B: Bob commented while offline
+    Note over B: Bob committed his own comments while offline
     B->>R: fetch → tracking pointer
     B->>B: integrate: union of Alice's files and his
-    B->>R: push — rejected! Alice's publish won the race
+    B->>R: push — rejected! Alice's push won the race
     B->>R: fetch again → tracking pointer
     B->>B: integrate Alice's new events (union again)
     B->>R: push ✓ — everyone converges
@@ -182,7 +193,7 @@ thing as a merge conflict. Even a genuinely concurrent disagreement (you resolve
 while I reopen it) isn't a conflict at the storage layer: both events are kept, and the fold
 picks the winner by its timestamp rule.
 
-If two people publish at the same moment, one push loses, fetches the winner's new events,
+If two people push at the same moment, one push loses, fetches the winner's new events,
 unions them in, and pushes again. The loop always converges.
 
 ## Threads never lose their code
@@ -253,7 +264,7 @@ commit" — the same inputs always give the same answer, on every machine.
 | --------------------- | ------------------------------------------------------------------ |
 | `git threads init`    | one-time setup of a clone: configures fetching of threads data     |
 | `git threads comment` | starts a thread on a commit, a file, or a line range               |
-| `git threads reply`   | replies to a thread                                                |
+| `git threads reply`   | replies to a thread, or to a specific message in one              |
 | `git threads edit`    | replaces the text of one of your messages (appends an edit event)  |
 | `git threads delete`  | retracts one of your messages (appends a tombstone)                |
 | `git threads resolve` | resolves a thread (`--reopen` to reopen)                           |
@@ -264,9 +275,8 @@ commit" — the same inputs always give the same answer, on every machine.
 | `git threads commit`  | seals everything you've drafted into local history, as one batch   |
 | `git threads push`    | shares your local discussion history (the fetch–union–push loop)   |
 
-Everything you write stays a local **draft** until you publish: `list` and `show` mark
-drafted messages, `discard` can still take them back, and one `commit` seals the whole
-session — however many comments it took — as a single batch that `push` then shares.
+Any ID the tool has ever printed works wherever a thread or message is expected — thread IDs
+and message IDs are interchangeable handles (and unique prefixes suffice).
 
 ## Design principles, in one place
 

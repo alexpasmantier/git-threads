@@ -37,12 +37,22 @@ see below):
 
 ## The publish loop
 
+Two commands share the work, carrying their exact git meanings: `git threads commit` seals
+all drafts into the local data ref as one batch (no network — see the
+[drafts staging area](storage.md#writes)), and `git threads push` runs the loop the spec
+calls publishing:
+
 ```
+0. COMMIT     drafts ref  →  one commit on local refs/threads/data   (git threads commit)
+   ── everything below is `git threads push` ──
 1. FETCH      remote refs/threads/data  →  tracking ref
 2. INTEGRATE  tracking ref  →  local refs/threads/data
 3. PUSH       local refs/threads/data  →  remote (explicit refspec)
    rejected because someone else pushed first?  →  go to 1
 ```
+
+`push` never touches drafts — nothing leaves your machine without an explicit `commit` — and
+prints a reminder when drafts are sitting uncommitted.
 
 Integration (step 2) has four cases, checked in order:
 

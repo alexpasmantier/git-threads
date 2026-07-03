@@ -17,7 +17,8 @@ their position is recomputed against whatever commit you're looking at.
 ## Status
 
 Experimental. The format and CLI cover the core loop — comment, reply, edit, delete, resolve,
-show, list, pull, publish, with re-anchoring — but the spec is a draft and may still change.
+discard, show, list, and the git-shaped pull/commit/push cycle with drafts, session batching,
+and re-anchoring — but the spec is a draft and may still change.
 This repository dogfoods itself: its own review threads live on its `refs/threads/data`.
 
 ## Try it

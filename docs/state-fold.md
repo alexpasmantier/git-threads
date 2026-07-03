@@ -82,5 +82,6 @@ byte-identical, so which copy survives is immaterial.
   event signing lands.
 - **Validation.** The fold folds what it's given, including events of unknown type (ignored
   for display, preserved in the set). Schema validation happens at write time.
-- **Threading.** Replies carry `in_reply_to`, but rendering is flat by spec (v1). The field is
-  preserved for future tree rendering and for exporters that need it (GitHub's model, e.g.).
+- **Threading.** Replies carry `in_reply_to` — the CLI records the specific message being
+  answered, not just the thread root — but rendering is flat by spec (v1). The field awaits
+  future tree rendering and exporters that need it (GitHub's model, e.g.).
