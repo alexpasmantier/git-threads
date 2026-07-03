@@ -130,11 +130,11 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     })?;
     let thread_id = root.id()?;
 
-    store.write(&Batch {
+    store.draft(&Batch {
         new_threads: vec![NewThread { anchor, root, events: vec![] }],
         appends: vec![],
     })?;
-    println!("created thread {thread_id}");
+    println!("drafted thread {thread_id} (git threads publish to share)");
     Ok(thread_id)
 }
 
@@ -148,11 +148,11 @@ pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
         e.in_reply_to = Some(target.id.clone());
     })?;
     let event_id = event.id()?;
-    store.write(&Batch {
+    store.draft(&Batch {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("added reply {} to thread {}", short(&event_id), short(&thread.id));
+    println!("drafted reply {} to thread {}", short(&event_id), short(&thread.id));
     Ok(event_id)
 }
 
@@ -178,11 +178,11 @@ pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId>
         e.supersedes = Some(target.chain_tip.clone());
     })?;
     let event_id = event.id()?;
-    store.write(&Batch {
+    store.draft(&Batch {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("edited {} (edit event {})", short(&target.id), short(&event_id));
+    println!("drafted edit of {} (edit event {})", short(&target.id), short(&event_id));
     Ok(event_id)
 }
 
@@ -206,11 +206,11 @@ pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
         e.supersedes = Some(target.id.clone());
     })?;
     let event_id = event.id()?;
-    store.write(&Batch {
+    store.draft(&Batch {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("retracted {}", short(&target.id));
+    println!("drafted retraction of {}", short(&target.id));
     Ok(event_id)
 }
 
@@ -221,12 +221,12 @@ pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
     let event = new_event(store.repo(), EventKind::Resolve, |e| {
         e.resolved = Some(resolved);
     })?;
-    store.write(&Batch {
+    store.draft(&Batch {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
     println!(
-        "thread {} {}",
+        "thread {} {} (draft)",
         short(&thread.id),
         if resolved { "resolved" } else { "reopened" }
     );
@@ -270,8 +270,12 @@ pub fn list(store: &Store, at: &str) -> Result<()> {
             .lines()
             .next()
             .unwrap_or("");
+        let drafts = match thread.drafts.len() {
+            0 => String::new(),
+            n => format!(", {n} draft{}", if n == 1 { "" } else { "s" }),
+        };
         println!(
-            "{}  [{status}] {location}{placement}  ({} message{})  {title}",
+            "{}  [{status}] {location}{placement}  ({} message{}{drafts})  {title}",
             short(&thread.id),
             folded.events.len(),
             if folded.events.len() == 1 { "" } else { "s" },
@@ -339,8 +343,9 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
         println!();
         let marker = if event.event.kind == EventKind::Reply { "↳ " } else { "● " };
         let edited = if event.edited { " (edited)" } else { "" };
+        let draft = if thread.drafts.contains(&event.id) { " (draft)" } else { "" };
         println!(
-            "{marker}{}  {} <{}> {}{edited}",
+            "{marker}{}  {} <{}> {}{edited}{draft}",
             short(&event.id),
             event.event.author.name,
             event.event.author.email,
@@ -353,6 +358,48 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
                 println!("  {line}");
             }
         }
+    }
+    Ok(())
+}
+
+/// Discard one drafted event before publishing. Discarding a drafted
+/// thread's root discards the whole draft thread.
+pub fn discard(store: &Store, prefix: &str) -> Result<()> {
+    let mut matches: Vec<(ThreadId, EventId)> = Vec::new();
+    for thread in store.threads()? {
+        for event_id in &thread.drafts {
+            if event_id.as_str().starts_with(prefix) {
+                matches.push((thread.id.clone(), event_id.clone()));
+            }
+        }
+    }
+    let (thread_id, event_id) = match matches.len() {
+        0 => bail!("no draft matches {prefix:?}"),
+        1 => matches.remove(0),
+        n => bail!(
+            "{prefix:?} is ambiguous ({n} drafts): {}",
+            matches.iter().map(|(_, e)| short(e)).collect::<Vec<_>>().join(", ")
+        ),
+    };
+    let removed = store.discard_draft(&thread_id, &event_id)?;
+    if removed > 1 || event_id == thread_id {
+        println!(
+            "discarded draft thread {} ({removed} event{})",
+            short(&thread_id),
+            if removed == 1 { "" } else { "s" },
+        );
+    } else {
+        println!("discarded draft {}", short(&event_id));
+    }
+    Ok(())
+}
+
+/// Discard every unpublished draft.
+pub fn discard_all(store: &Store) -> Result<()> {
+    let removed = store.discard_all_drafts()?;
+    match removed {
+        0 => println!("no drafts"),
+        n => println!("discarded {n} draft{}", if n == 1 { "" } else { "s" }),
     }
     Ok(())
 }
@@ -406,13 +453,23 @@ pub fn pull(store: &Store, remote: &str) -> Result<()> {
     Ok(())
 }
 
-/// The publish loop (SPEC.md §7.2): integrate remote state, push, and on a
-/// lost race re-integrate and retry.
+/// The publish loop (SPEC.md §7.2): integrate remote state, promote all
+/// drafts as one commit (§5.2 session batching), push, and on a lost race
+/// re-integrate and retry.
 pub fn publish(store: &Store, remote: &str) -> Result<()> {
     let workdir = workdir(store)?;
     const MAX_ATTEMPTS: usize = 5;
     for attempt in 1..=MAX_ATTEMPTS {
         fetch_and_integrate(store, remote)?;
+        if let Some(promoted) = store.commit_drafts()? {
+            println!(
+                "committed {} drafted event{} in {} thread{}",
+                promoted.events,
+                if promoted.events == 1 { "" } else { "s" },
+                promoted.threads,
+                if promoted.threads == 1 { "" } else { "s" },
+            );
+        }
         if store.tip()?.is_none() {
             println!("nothing to publish");
             return Ok(());

@@ -253,3 +253,84 @@ fn replying_to_a_reply_targets_it_within_the_same_thread() {
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
     assert!(fold_thread(thread.events).resolved);
 }
+
+#[test]
+fn session_of_drafts_publishes_as_one_commit() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+
+    // A "review session": two threads and a reply, all drafted.
+    let first = commands::comment(&store, &opts("first thread")).unwrap();
+    commands::reply(&store, first.as_str(), "self-reply").unwrap();
+    commands::comment(&store, &opts("second thread")).unwrap();
+    assert!(store.tip().unwrap().is_none(), "nothing published yet");
+    assert!(store.drafts_tip().unwrap().is_some());
+
+    let promoted = store.commit_drafts().unwrap().expect("drafts promoted");
+    assert_eq!((promoted.events, promoted.threads), (3, 2));
+    assert!(store.drafts_tip().unwrap().is_none(), "drafts ref cleared");
+
+    // One commit, with the batched message, pinning the anchored commit.
+    let head = git_out(dir.path(), &["rev-parse", "HEAD"]);
+    let count = git_out(dir.path(), &["rev-list", "--count", "refs/threads/data", &format!("^{head}")]);
+    assert_eq!(count, "1");
+    let subject = git_out(dir.path(), &["log", "--pretty=%s", "-1", "refs/threads/data"]);
+    assert_eq!(subject, "threads: 3 events in 2 threads");
+    let parents = git_out(dir.path(), &["log", "--pretty=%P", "-1", "refs/threads/data"]);
+    assert_eq!(parents, head, "sole parent is the anchored commit pin");
+
+    // Drafts folded into the published snapshot; nothing marked draft anymore.
+    let thread = store.read_thread(&first).unwrap().unwrap();
+    assert_eq!(thread.events.len(), 2);
+    assert!(thread.drafts.is_empty());
+}
+
+#[test]
+fn drafts_are_visible_and_marked_before_publish() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread_id = commands::comment(&store, &opts("draft me")).unwrap();
+
+    let thread = store.read_thread(&thread_id).unwrap().expect("draft visible");
+    assert_eq!(thread.events.len(), 1);
+    assert!(thread.drafts.contains(&thread_id), "root marked as draft");
+
+    // Drafted events are addressable: replying to a draft works.
+    let reply_id = commands::reply(&store, thread_id.as_str(), "reply to a draft").unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    assert!(thread.drafts.contains(&reply_id));
+}
+
+#[test]
+fn discard_removes_a_draft_or_a_whole_draft_thread() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread_id = commands::comment(&store, &opts("keep or toss")).unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "toss this").unwrap();
+
+    commands::discard(&store, reply_id.as_str()).unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    assert_eq!(thread.events.len(), 1, "reply gone, root remains");
+
+    // Discarding the root takes the whole draft thread with it.
+    commands::discard(&store, thread_id.as_str()).unwrap();
+    assert!(store.read_thread(&thread_id).unwrap().is_none());
+    assert!(store.drafts_tip().unwrap().is_none(), "empty drafts ref deleted");
+
+    // Published events can never be discarded.
+    let published = commands::comment(&store, &opts("published")).unwrap();
+    store.commit_drafts().unwrap().unwrap();
+    let err = commands::discard(&store, published.as_str()).unwrap_err();
+    assert!(err.to_string().contains("no draft matches"), "unexpected error: {err:#}");
+}
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("failed to run git");
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}

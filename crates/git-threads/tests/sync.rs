@@ -97,11 +97,13 @@ fn concurrent_publishes_converge_via_union_merge() {
     let alice_store = Store::open(&alice).unwrap();
     let bob_store = Store::open(&bob).unwrap();
 
-    // Both comment while offline from each other.
+    // Both comment while offline from each other. Bob promotes his drafts
+    // locally before fetching — the race window where the remote moves after
+    // your local commit — so his publish must union-merge.
     let alice_thread = comment(&alice_store, "alice's concern");
     let bob_thread = comment(&bob_store, "bob's concern");
+    bob_store.commit_drafts().unwrap().expect("bob's drafts promoted");
 
-    // Alice wins the race; Bob's publish must lose, re-integrate, and retry.
     commands::publish(&alice_store, "origin").unwrap();
     commands::publish(&bob_store, "origin").unwrap();
 
@@ -139,9 +141,11 @@ fn init_refspec_never_clobbers_unpublished_local_data() {
         "init writes the tracking refspec, got: {refspecs}"
     );
 
-    // Alice has unpublished local data; Bob publishes; a plain fetch must
-    // land Bob's state in the tracking ref, not on Alice's local ref.
+    // Alice has unpublished local data (drafts promoted locally, not yet
+    // pushed); Bob publishes; a plain fetch must land Bob's state in the
+    // tracking ref, not on Alice's local ref.
     comment(&alice_store, "unpublished");
+    alice_store.commit_drafts().unwrap().expect("drafts promoted");
     let local_tip = git(&alice, &["rev-parse", "refs/threads/data"]);
     comment(&bob_store, "bob's thread");
     commands::publish(&bob_store, "origin").unwrap();

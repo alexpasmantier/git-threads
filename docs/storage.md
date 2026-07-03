@@ -47,9 +47,14 @@ Validation happens at write time: schema field tables, "a thread root must be a 
 "appends must target an existing thread". The storage layer stores; it never repairs.
 
 The spec wants one review session batched into **one commit** (`threads: N events in M
-threads`). The plumbing supports it — `Batch` carries arbitrarily many threads and appends —
-but today's CLI commits per command; proper batching arrives with draft/unpublished comments
-(a client-local concern, deliberately outside the shared format).
+threads`). The CLI achieves this with a **drafts staging area**: every event-writing command
+appends to `refs/threads/drafts` — a local-only ref with the same tree layout, holding
+exactly the unpublished delta — and `publish` promotes the whole drafts tree into the data
+ref as a single commit, then deletes the drafts ref. Drafts are a client-local concern,
+deliberately outside the shared format: the drafts ref is never fetched or pushed, `list`
+and `show` overlay it with draft markers, and `discard` removes drafted events before they
+ever reach shared history. Drafts commits carry no history parent — only the anchored-commit
+retention pins, so a commit you commented on is GC-protected from the moment of drafting.
 
 ## Retention parents: discussed commits can't be garbage-collected
 

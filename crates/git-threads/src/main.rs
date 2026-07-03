@@ -76,6 +76,14 @@ enum Command {
         #[arg(long, default_value = "HEAD")]
         at: String,
     },
+    /// Discard drafted events before they're published
+    Discard {
+        /// Event ID (or unique prefix) of a draft; a draft thread's root discards the whole thread
+        event: Option<String>,
+        /// Discard every draft
+        #[arg(long, conflicts_with = "event")]
+        all: bool,
+    },
     /// Fetch and integrate threads data from a remote
     Pull {
         /// Remote to pull from
@@ -146,6 +154,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Resolve { thread, reopen } => commands::resolve(&store, &thread, !reopen),
+        Command::Discard { event, all } => match (event, all) {
+            (None, true) => commands::discard_all(&store),
+            (Some(event), false) => commands::discard(&store, &event),
+            _ => anyhow::bail!("pass a draft event ID, or --all"),
+        },
         Command::Show { thread, at } => commands::show(&store, &thread, &at),
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Publish { remote } => commands::publish(&store, &remote),

@@ -257,10 +257,15 @@ commit" — the same inputs always give the same answer, on every machine.
 | `git threads edit`    | replaces the text of one of your messages (appends an edit event)  |
 | `git threads delete`  | retracts one of your messages (appends a tombstone)                |
 | `git threads resolve` | resolves a thread (`--reopen` to reopen)                           |
+| `git threads discard` | removes a drafted event before it's published (`--all` for every draft) |
 | `git threads show`    | one thread: its code context (re-anchored) and conversation        |
 | `git threads list`    | all threads, with their re-anchor status against your current code |
 | `git threads pull`    | fetches and integrates other people's discussion data              |
-| `git threads publish` | shares your local discussion data (the fetch–union–push loop)      |
+| `git threads publish` | shares everything you've drafted, batched as one unit (the fetch–union–push loop) |
+
+Everything you write stays a local **draft** until you publish: `list` and `show` mark
+drafted messages, `discard` can still take them back, and one `publish` ships the whole
+session — however many comments it took — as a single batch.
 
 ## Design principles, in one place
 
