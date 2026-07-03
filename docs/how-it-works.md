@@ -261,11 +261,12 @@ commit" — the same inputs always give the same answer, on every machine.
 | `git threads show`    | one thread: its code context (re-anchored) and conversation        |
 | `git threads list`    | all threads, with their re-anchor status against your current code |
 | `git threads pull`    | fetches and integrates other people's discussion data              |
-| `git threads publish` | shares everything you've drafted, batched as one unit (the fetch–union–push loop) |
+| `git threads commit`  | seals everything you've drafted into local history, as one batch   |
+| `git threads push`    | shares your local discussion history (the fetch–union–push loop)   |
 
 Everything you write stays a local **draft** until you publish: `list` and `show` mark
-drafted messages, `discard` can still take them back, and one `publish` ships the whole
-session — however many comments it took — as a single batch.
+drafted messages, `discard` can still take them back, and one `commit` seals the whole
+session — however many comments it took — as a single batch that `push` then shares.
 
 ## Design principles, in one place
 

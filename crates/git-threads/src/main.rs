@@ -90,9 +90,11 @@ enum Command {
         #[arg(long, default_value = "origin")]
         remote: String,
     },
-    /// Push local threads data to a remote (integrating remote state first)
-    Publish {
-        /// Remote to publish to
+    /// Seal all drafted events into local threads history as one commit
+    Commit,
+    /// Push local threads history to a remote (integrating remote state first)
+    Push {
+        /// Remote to push to
         #[arg(long, default_value = "origin")]
         remote: String,
     },
@@ -161,7 +163,8 @@ fn main() -> anyhow::Result<()> {
         },
         Command::Show { thread, at } => commands::show(&store, &thread, &at),
         Command::Pull { remote } => commands::pull(&store, &remote),
-        Command::Publish { remote } => commands::publish(&store, &remote),
+        Command::Commit => commands::commit(&store),
+        Command::Push { remote } => commands::push(&store, &remote),
         Command::List { at } => commands::list(&store, &at),
     }
 }

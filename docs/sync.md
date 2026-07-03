@@ -3,7 +3,7 @@
 How discussion data moves between clones without conflicts and without a coordinating server.
 Spec: [SPEC.md](../SPEC.md) §7. Code:
 [`crates/git-threads/src/commands.rs`](../crates/git-threads/src/commands.rs) (`init`, `pull`,
-`publish`, `fetch_and_integrate`) and
+`commit`, `push`, `fetch_and_integrate`) and
 [`crates/git-threads/src/store.rs`](../crates/git-threads/src/store.rs) (`integrate`,
 `union_trees`).
 
@@ -31,7 +31,7 @@ see below):
 - **No push refspec is configured.** Setting `remote.<name>.push` *replaces* git's default
   push behavior for the whole clone — a bare `git push` would silently stop pushing the
   current branch. Publishing pushes explicitly instead.
-- **Self-healing:** `pull` and `publish` pass the full refspec explicitly on every fetch, so
+- **Self-healing:** `pull` and `push` pass the full refspec explicitly on every fetch, so
   they work (and repair themselves) even in a clone that never ran `init`. Git config and
   hooks are per-clone by design; "install the tool, run any command once" is the setup floor.
 

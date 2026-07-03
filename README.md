@@ -30,7 +30,8 @@ $ git threads comment --file src/parser.rs --lines 120-128 \
     -m "does this handle empty input?"      # start a thread on HEAD's change
 $ git threads list                          # threads, re-anchored to your checkout
 $ git threads show <thread-id>              # code context + conversation
-$ git threads publish                       # share; safe under concurrent publishes
+$ git threads commit                        # seal your drafts into local history
+$ git threads push                          # share; safe under concurrent pushes
 ```
 
 Reading the raw data needs nothing but git:

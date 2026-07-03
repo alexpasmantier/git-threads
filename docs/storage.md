@@ -49,8 +49,8 @@ Validation happens at write time: schema field tables, "a thread root must be a 
 The spec wants one review session batched into **one commit** (`threads: N events in M
 threads`). The CLI achieves this with a **drafts staging area**: every event-writing command
 appends to `refs/threads/drafts` — a local-only ref with the same tree layout, holding
-exactly the unpublished delta — and `publish` promotes the whole drafts tree into the data
-ref as a single commit, then deletes the drafts ref. Drafts are a client-local concern,
+exactly the unpublished delta — and `commit` promotes the whole drafts tree into the data
+ref as a single commit, then deletes the drafts ref (`push` then shares the data ref). Drafts are a client-local concern,
 deliberately outside the shared format: the drafts ref is never fetched or pushed, `list`
 and `show` overlay it with draft markers, and `discard` removes drafted events before they
 ever reach shared history. Drafts commits carry no history parent — only the anchored-commit

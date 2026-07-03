@@ -1,4 +1,4 @@
-//! Integration tests for the publish/pull loop (SPEC.md §7.2): two clones of
+//! Integration tests for the commit/push/pull loop (SPEC.md §7.2): two clones of
 //! a shared bare remote, including the concurrent-publish race that forces
 //! the tree-union merge path.
 
@@ -74,7 +74,8 @@ fn publish_then_pull_transfers_threads() {
     let bob_store = Store::open(&bob).unwrap();
 
     let thread_id = comment(&alice_store, "does three need to be a string?");
-    commands::publish(&alice_store, "origin").unwrap();
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
 
     commands::pull(&bob_store, "origin").unwrap();
     let thread = bob_store.read_thread(&thread_id).unwrap().expect("thread arrived");
@@ -85,7 +86,8 @@ fn publish_then_pull_transfers_threads() {
 
     // Bob replies and publishes; Alice pulls the reply back.
     commands::reply(&bob_store, thread_id.as_str(), "no, fixing").unwrap();
-    commands::publish(&bob_store, "origin").unwrap();
+    commands::commit(&bob_store).unwrap();
+    commands::push(&bob_store, "origin").unwrap();
     commands::pull(&alice_store, "origin").unwrap();
     let thread = alice_store.read_thread(&thread_id).unwrap().unwrap();
     assert_eq!(thread.events.len(), 2);
@@ -104,8 +106,10 @@ fn concurrent_publishes_converge_via_union_merge() {
     let bob_thread = comment(&bob_store, "bob's concern");
     bob_store.commit_drafts().unwrap().expect("bob's drafts promoted");
 
-    commands::publish(&alice_store, "origin").unwrap();
-    commands::publish(&bob_store, "origin").unwrap();
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
+    commands::commit(&bob_store).unwrap();
+    commands::push(&bob_store, "origin").unwrap();
 
     commands::pull(&alice_store, "origin").unwrap();
 
@@ -123,7 +127,8 @@ fn concurrent_publishes_converge_via_union_merge() {
 
     // Idempotence: re-publishing and re-pulling changes nothing.
     let tip_before = git(&bob, &["rev-parse", "refs/threads/data"]);
-    commands::publish(&bob_store, "origin").unwrap();
+    commands::commit(&bob_store).unwrap();
+    commands::push(&bob_store, "origin").unwrap();
     commands::pull(&bob_store, "origin").unwrap();
     assert_eq!(git(&bob, &["rev-parse", "refs/threads/data"]), tip_before);
 }
@@ -148,7 +153,8 @@ fn init_refspec_never_clobbers_unpublished_local_data() {
     alice_store.commit_drafts().unwrap().expect("drafts promoted");
     let local_tip = git(&alice, &["rev-parse", "refs/threads/data"]);
     comment(&bob_store, "bob's thread");
-    commands::publish(&bob_store, "origin").unwrap();
+    commands::commit(&bob_store).unwrap();
+    commands::push(&bob_store, "origin").unwrap();
 
     git(&alice, &["fetch", "-q", "origin"]);
     assert_eq!(git(&alice, &["rev-parse", "refs/threads/data"]), local_tip);
@@ -170,15 +176,18 @@ fn interleaved_conversation_converges() {
     let bob_store = Store::open(&bob).unwrap();
 
     let thread_id = comment(&alice_store, "root");
-    commands::publish(&alice_store, "origin").unwrap();
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
     commands::pull(&bob_store, "origin").unwrap();
 
     // Concurrent replies to the same thread from both sides.
     commands::reply(&alice_store, thread_id.as_str(), "alice again").unwrap();
     commands::reply(&bob_store, thread_id.as_str(), "bob here").unwrap();
     commands::resolve(&bob_store, thread_id.as_str(), true).unwrap();
-    commands::publish(&bob_store, "origin").unwrap();
-    commands::publish(&alice_store, "origin").unwrap();
+    commands::commit(&bob_store).unwrap();
+    commands::push(&bob_store, "origin").unwrap();
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
     commands::pull(&bob_store, "origin").unwrap();
 
     for store in [&alice_store, &bob_store] {

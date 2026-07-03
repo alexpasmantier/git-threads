@@ -453,30 +453,40 @@ pub fn pull(store: &Store, remote: &str) -> Result<()> {
     Ok(())
 }
 
-/// The publish loop (SPEC.md §7.2): integrate remote state, promote all
-/// drafts as one commit (§5.2 session batching), push, and on a lost race
-/// re-integrate and retry.
-pub fn publish(store: &Store, remote: &str) -> Result<()> {
+/// Seal all drafts into the local data ref as one commit (SPEC.md §5.2
+/// session batching). Local only — `push` shares it.
+pub fn commit(store: &Store) -> Result<()> {
+    match store.commit_drafts()? {
+        Some(promoted) => println!(
+            "committed {} event{} in {} thread{} (git threads push to share)",
+            promoted.events,
+            if promoted.events == 1 { "" } else { "s" },
+            promoted.threads,
+            if promoted.threads == 1 { "" } else { "s" },
+        ),
+        None => println!("nothing to commit (no drafts)"),
+    }
+    Ok(())
+}
+
+/// The publish loop (SPEC.md §7.2): integrate remote state, push the local
+/// data ref, and on a lost race re-integrate and retry. Drafts are not
+/// included — `commit` seals them first.
+pub fn push(store: &Store, remote: &str) -> Result<()> {
     let workdir = workdir(store)?;
+    if store.drafts_tip()?.is_some() {
+        eprintln!("note: you have drafted events; git threads commit to include them");
+    }
     const MAX_ATTEMPTS: usize = 5;
     for attempt in 1..=MAX_ATTEMPTS {
         fetch_and_integrate(store, remote)?;
-        if let Some(promoted) = store.commit_drafts()? {
-            println!(
-                "committed {} drafted event{} in {} thread{}",
-                promoted.events,
-                if promoted.events == 1 { "" } else { "s" },
-                promoted.threads,
-                if promoted.threads == 1 { "" } else { "s" },
-            );
-        }
         if store.tip()?.is_none() {
-            println!("nothing to publish");
+            println!("nothing to push");
             return Ok(());
         }
         match git(&workdir, &["push", remote, "refs/threads/data:refs/threads/data"]) {
             Ok(_) => {
-                println!("published to {remote}");
+                println!("pushed to {remote}");
                 return Ok(());
             }
             Err(err) => {
@@ -485,9 +495,9 @@ pub fn publish(store: &Store, remote: &str) -> Result<()> {
                     || err.to_string().contains("fetch first")
                     || err.to_string().contains("stale info");
                 if !lost_race || attempt == MAX_ATTEMPTS {
-                    return Err(err.context(format!("publish failed after {attempt} attempt(s)")));
+                    return Err(err.context(format!("push failed after {attempt} attempt(s)")));
                 }
-                eprintln!("push rejected (concurrent publish), retrying ({attempt}/{MAX_ATTEMPTS})");
+                eprintln!("push rejected (concurrent push), retrying ({attempt}/{MAX_ATTEMPTS})");
             }
         }
     }
