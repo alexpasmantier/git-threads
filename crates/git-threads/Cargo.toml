@@ -14,5 +14,8 @@ gix = { version = "0.85.0", features = ["tree-editor"] }
 serde_json.workspace = true
 jiff = "0.2.31"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3.27.0"

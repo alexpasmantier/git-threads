@@ -397,6 +397,7 @@ dependencies = [
  "git-threads-core",
  "gix",
  "jiff",
+ "libc",
  "serde_json",
  "tempfile",
 ]

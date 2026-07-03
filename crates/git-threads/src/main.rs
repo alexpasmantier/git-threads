@@ -91,7 +91,18 @@ impl From<SideArg> for Side {
     }
 }
 
+/// Restore SIGPIPE's default disposition (Rust's runtime ignores it, making
+/// println! panic when a downstream pipe like `head` closes early). With the
+/// default, the process exits quietly like any other CLI tool.
+fn reset_sigpipe() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    reset_sigpipe();
     let store = Store::discover()?;
     match Cli::parse().command {
         Command::Init { remote } => commands::init(&store, &remote),
