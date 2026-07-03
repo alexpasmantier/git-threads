@@ -1,0 +1,1 @@
+{"author":{"email":"alexandre.pasmantier@gitguardian.com","name":"Alex Pasmantier"},"body":"Fixed in 0976b6f: SIGPIPE is reset to SIG_DFL at startup (unix only), so the process now exits quietly with 141 when the downstream pipe closes. Verified with `show | head`.","in_reply_to":"bebce03de90bc053e93673edfce384fe1850da51","ts":"2026-07-03T08:28:18Z","type":"reply","v":1}
