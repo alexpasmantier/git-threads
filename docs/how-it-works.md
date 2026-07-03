@@ -5,7 +5,8 @@ git repository itself, next to the code they talk about. This document explains 
 language. You don't need to know git internals; the one section that touches them
 ([Where the data lives](#where-the-data-lives)) explains what it uses as it goes.
 
-The formal rules live in [SPEC.md](../SPEC.md). This document is the guided tour.
+The formal rules live in [SPEC.md](../SPEC.md). This document is the guided tour; for the
+full mechanics of each subsystem, see the [deep dives](README.md).
 
 ## The problem
 
