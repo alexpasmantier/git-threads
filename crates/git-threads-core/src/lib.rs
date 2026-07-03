@@ -10,16 +10,18 @@
 //! - §3 anchors → [`anchor`]
 //! - §6 canonical JSON → [`canonical`]
 //! - §4.1 snippet derivation → [`snippet`]
-//! - §4.2 re-anchoring ladder → not yet implemented
+//! - §4.2 re-anchoring ladder (content-matching steps) → [`reanchor`]
 //!
 //! Storage (§5) and synchronization (§7) are git-facing and live in the CLI
-//! crate, not here.
+//! crate, not here — as are the git-facing rungs of the re-anchoring ladder
+//! (blob identity, rename detection).
 
 pub mod anchor;
 pub mod canonical;
 pub mod event;
 pub mod fold;
 pub mod id;
+pub mod reanchor;
 pub mod snippet;
 
 pub use anchor::{Anchor, AnchorKind, ColRange, DiffRef, LineRange, Side};
@@ -27,4 +29,5 @@ pub use canonical::to_canonical_json;
 pub use event::{Author, Event, EventKind, Timestamp};
 pub use fold::{FoldedEvent, FoldedThread, fold_thread};
 pub use id::{EventId, GitOid, ThreadId};
+pub use reanchor::{ReanchorStatus, locate_snippet};
 pub use snippet::{Snippet, SnippetTarget, derive_snippet};

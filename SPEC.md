@@ -118,6 +118,10 @@ Evaluate in order; stop at the first success. At every step, a match MUST be **u
 
 Candidate files in v1 are limited to `A.path` plus rename-detected paths. Cross-file search is an explicitly non-normative client extension (§ideas).
 
+The ladder as written applies to `range` anchors. `commit` anchors are never re-anchored — they describe a whole change, which exists only in its own diff. `file` anchors use presence, not content: identical blob at a candidate path → `exact`; a candidate path present with different content → `relocated`; otherwise `outdated`.
+
+Two consequences implementations may rely on: raising the fuzz level only relaxes the pattern, so ambiguity at one level implies ambiguity at every later level — the search may stop at the first ambiguous level. And a truncated snippet's middle is unconstrained by line matching, so a byte-exact match MUST be confirmed against the stored range hash; the whitespace-insensitive pass cannot be, which is one reason its results are `fuzzy(f)`, never `relocated`.
+
 Re-anchor results are pure functions of `(A, T)` — both immutable — so clients SHOULD cache them locally (§7). Caches are never part of the shared format.
 
 ## 5. Storage layout

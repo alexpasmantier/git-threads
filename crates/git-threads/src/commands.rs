@@ -1,8 +1,9 @@
+use crate::reanchor::{self, Reanchor};
 use crate::store::{Append, Batch, Integration, NewThread, Store, ThreadRecord};
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
-    Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, GitOid, LineRange, Side,
-    SnippetTarget, ThreadId, Timestamp, derive_snippet, fold_thread,
+    Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, GitOid, LineRange,
+    ReanchorStatus, Side, SnippetTarget, ThreadId, Timestamp, derive_snippet, fold_thread,
 };
 use gix::ObjectId;
 use std::path::Path;
@@ -170,13 +171,15 @@ pub fn resolve(store: &Store, thread_prefix: &str, resolved: bool) -> Result<()>
     Ok(())
 }
 
-/// List threads in the current snapshot with their folded state.
-pub fn list(store: &Store) -> Result<()> {
+/// List threads in the current snapshot with their folded state and their
+/// re-anchor status against `at` (SPEC.md §4.2).
+pub fn list(store: &Store, at: &str) -> Result<()> {
     let mut threads = store.threads()?;
     if threads.is_empty() {
         println!("no threads");
         return Ok(());
     }
+    let target = resolve_commit(store.repo(), at)?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
     for thread in threads {
@@ -187,6 +190,16 @@ pub fn list(store: &Store) -> Result<()> {
             (Some(path), None) => path.clone(),
             _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
         };
+        let placement = match reanchor::reanchor(store, &thread.anchor, target)? {
+            Reanchor::WholeCommit | Reanchor::Located { status: ReanchorStatus::Exact, .. } => {
+                String::new()
+            }
+            Reanchor::Located { path, lines, status } => {
+                let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+                format!("  → {path}{lines} ({status})")
+            }
+            Reanchor::Outdated => "  (outdated)".to_string(),
+        };
         let title = folded
             .events
             .first()
@@ -196,7 +209,7 @@ pub fn list(store: &Store) -> Result<()> {
             .next()
             .unwrap_or("");
         println!(
-            "{}  [{status}] {location}  ({} message{})  {title}",
+            "{}  [{status}] {location}{placement}  ({} message{})  {title}",
             short(&thread.id),
             folded.events.len(),
             if folded.events.len() == 1 { "" } else { "s" },
@@ -205,8 +218,11 @@ pub fn list(store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// Render a thread: anchor location, code context, and the folded conversation.
-pub fn show(store: &Store, thread_prefix: &str) -> Result<()> {
+/// Render a thread: anchor location, re-anchor placement on `at` (SPEC.md
+/// §4.2), code context, and the folded conversation. The context comes from
+/// the re-anchored location when there is one, from the anchor's own diff
+/// when outdated (§4.2 step 4).
+pub fn show(store: &Store, thread_prefix: &str, at: &str) -> Result<()> {
     let thread = find_thread(store, thread_prefix)?;
     let folded = fold_thread(thread.events.clone());
     let anchor = &thread.anchor;
@@ -228,39 +244,30 @@ pub fn show(store: &Store, thread_prefix: &str) -> Result<()> {
         &anchor.diff.head.as_str()[..12]
     );
 
-    if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
-        let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
-        let data = &store.repo().find_blob(blob_id)?.data;
-        let content = String::from_utf8_lossy(data);
-        if let Some(snippet) = derive_snippet(&content, lines) {
-            println!();
-            fn print_line(line_no: &mut u32, line: &str, marked: bool) {
-                println!("{} {line_no:>5} │ {line}", if marked { ">" } else { " " });
-                *line_no += 1;
+    let target = resolve_commit(store.repo(), at)?;
+    let target_short = &target.to_string()[..12];
+    let placement = reanchor::reanchor(store, anchor, target)?;
+    match &placement {
+        Reanchor::WholeCommit => {}
+        Reanchor::Located { path, lines, status } => {
+            let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+            println!("now {path}{lines} at {target_short} ({status})");
+        }
+        Reanchor::Outdated => {
+            println!("outdated at {target_short}: showing the anchor's own context");
+        }
+    }
+
+    match &placement {
+        Reanchor::Located { path, lines: Some(lines), .. } => {
+            if let Some(blob) = reanchor::blob_at(store.repo(), target, path)? {
+                print_snippet(&reanchor::blob_content(store.repo(), blob)?, *lines);
             }
-            let mut line_no = snippet.first_line;
-            for line in &snippet.before {
-                print_line(&mut line_no, line, false);
-            }
-            match &snippet.target {
-                SnippetTarget::Full(lines) => {
-                    for line in lines {
-                        print_line(&mut line_no, line, true);
-                    }
-                }
-                SnippetTarget::Truncated { head, tail, omitted, .. } => {
-                    for line in head {
-                        print_line(&mut line_no, line, true);
-                    }
-                    println!("        ⋮ {omitted} lines omitted");
-                    line_no += *omitted as u32;
-                    for line in tail {
-                        print_line(&mut line_no, line, true);
-                    }
-                }
-            }
-            for line in &snippet.after {
-                print_line(&mut line_no, line, false);
+        }
+        _ => {
+            if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
+                let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
+                print_snippet(&reanchor::blob_content(store.repo(), blob_id)?, lines);
             }
         }
     }
@@ -282,6 +289,42 @@ pub fn show(store: &Store, thread_prefix: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Print a marked, line-numbered snippet of `lines` out of `content`.
+fn print_snippet(content: &str, lines: LineRange) {
+    let Some(snippet) = derive_snippet(content, lines) else {
+        return;
+    };
+    println!();
+    fn print_line(line_no: &mut u32, line: &str, marked: bool) {
+        println!("{} {line_no:>5} │ {line}", if marked { ">" } else { " " });
+        *line_no += 1;
+    }
+    let mut line_no = snippet.first_line;
+    for line in &snippet.before {
+        print_line(&mut line_no, line, false);
+    }
+    match &snippet.target {
+        SnippetTarget::Full(lines) => {
+            for line in lines {
+                print_line(&mut line_no, line, true);
+            }
+        }
+        SnippetTarget::Truncated { head, tail, omitted, .. } => {
+            for line in head {
+                print_line(&mut line_no, line, true);
+            }
+            println!("        ⋮ {omitted} lines omitted");
+            line_no += *omitted as u32;
+            for line in tail {
+                print_line(&mut line_no, line, true);
+            }
+        }
+    }
+    for line in &snippet.after {
+        print_line(&mut line_no, line, false);
+    }
 }
 
 /// Fetch the remote's threads data into the tracking ref and integrate it
@@ -455,7 +498,7 @@ fn short(id: &EventId) -> &str {
     &id.as_str()[..12]
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(dir)

@@ -59,6 +59,9 @@ enum Command {
     Show {
         /// Thread ID (or unique prefix)
         thread: String,
+        /// Commit to re-anchor the thread against
+        #[arg(long, default_value = "HEAD")]
+        at: String,
     },
     /// Fetch and integrate threads data from a remote
     Pull {
@@ -73,7 +76,11 @@ enum Command {
         remote: String,
     },
     /// List threads with their current state
-    List,
+    List {
+        /// Commit to re-anchor threads against
+        #[arg(long, default_value = "HEAD")]
+        at: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -118,9 +125,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Resolve { thread, reopen } => commands::resolve(&store, &thread, !reopen),
-        Command::Show { thread } => commands::show(&store, &thread),
+        Command::Show { thread, at } => commands::show(&store, &thread, &at),
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Publish { remote } => commands::publish(&store, &remote),
-        Command::List => commands::list(&store),
+        Command::List { at } => commands::list(&store, &at),
     }
 }
