@@ -8,7 +8,12 @@ use gix::ObjectId;
 use std::path::Path;
 use std::process::Command;
 
-const FETCH_REFSPEC: &str = "+refs/threads/*:refs/threads/*";
+/// The fetch refspec `init` configures (SPEC.md §7.1): remote state lands in
+/// the tracking ref, never directly on `refs/threads/data` — a direct mapping
+/// would let any fetch clobber the local ref, orphaning unpublished events.
+fn fetch_refspec(remote: &str) -> String {
+    format!("+refs/threads/data:{}", Store::tracking_ref(remote))
+}
 
 /// Configure this clone (SPEC.md §7.1): add the additive fetch refspec, then
 /// attempt an initial fetch. No push refspec is written — publishing pushes
@@ -23,13 +28,14 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
     if !remotes.lines().any(|line| line == remote) {
         bail!("remote {remote:?} not found (git remote add it first, or pass --remote)");
     }
+    let refspec = fetch_refspec(remote);
     let key = format!("remote.{remote}.fetch");
     let existing = git(&workdir, &["config", "--get-all", &key]).unwrap_or_default();
-    if existing.lines().any(|line| line == FETCH_REFSPEC) {
-        println!("{key} already includes {FETCH_REFSPEC}");
+    if existing.lines().any(|line| line == refspec) {
+        println!("{key} already includes {refspec}");
     } else {
-        git(&workdir, &["config", "--add", &key, FETCH_REFSPEC])?;
-        println!("configured {key} += {FETCH_REFSPEC}");
+        git(&workdir, &["config", "--add", &key, &refspec])?;
+        println!("configured {key} += {refspec}");
     }
     match git(&workdir, &["fetch", remote]) {
         Ok(_) => println!("fetched from {remote}"),
@@ -327,7 +333,7 @@ pub fn publish(store: &Store, remote: &str) -> Result<()> {
 /// even without the configured refspec from `init`.
 fn fetch_and_integrate(store: &Store, remote: &str) -> Result<Option<Integration>> {
     let workdir = workdir(store)?;
-    let refspec = format!("+refs/threads/data:{}", Store::tracking_ref(remote));
+    let refspec = fetch_refspec(remote);
     if let Err(err) = git(&workdir, &["fetch", remote, &refspec]) {
         if err.to_string().contains("couldn't find remote ref") {
             return Ok(None);

@@ -127,6 +127,31 @@ fn concurrent_publishes_converge_via_union_merge() {
 }
 
 #[test]
+fn init_refspec_never_clobbers_unpublished_local_data() {
+    let (_root, alice, bob) = setup();
+    let alice_store = Store::open(&alice).unwrap();
+    let bob_store = Store::open(&bob).unwrap();
+
+    commands::init(&alice_store, "origin").unwrap();
+    let refspecs = git(&alice, &["config", "--get-all", "remote.origin.fetch"]);
+    assert!(
+        refspecs.contains("+refs/threads/data:refs/threads/remotes/origin/data"),
+        "init writes the tracking refspec, got: {refspecs}"
+    );
+
+    // Alice has unpublished local data; Bob publishes; a plain fetch must
+    // land Bob's state in the tracking ref, not on Alice's local ref.
+    comment(&alice_store, "unpublished");
+    let local_tip = git(&alice, &["rev-parse", "refs/threads/data"]);
+    comment(&bob_store, "bob's thread");
+    commands::publish(&bob_store, "origin").unwrap();
+
+    git(&alice, &["fetch", "-q", "origin"]);
+    assert_eq!(git(&alice, &["rev-parse", "refs/threads/data"]), local_tip);
+    assert!(alice_store.tracking_tip("origin").unwrap().is_some());
+}
+
+#[test]
 fn pull_from_empty_remote_is_graceful() {
     let (_root, alice, _bob) = setup();
     let alice_store = Store::open(&alice).unwrap();
