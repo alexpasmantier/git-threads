@@ -62,6 +62,10 @@ impl Batch {
 }
 
 impl Store {
+    pub fn repo(&self) -> &gix::Repository {
+        &self.repo
+    }
+
     pub fn discover() -> Result<Self> {
         let repo = gix::discover(".").context("not inside a git repository")?;
         Ok(Store { repo })
