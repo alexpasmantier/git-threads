@@ -4,6 +4,21 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 (anchors, drafts, the fold, re-anchoring, sync), start with
 [how it works](how-it-works.md) and the [deep dives](README.md).
 
+| command | what it does |
+|---|---|
+| [`init`](#git-threads-init) | one-time setup of a clone: configures fetching of threads data |
+| [`comment`](#git-threads-comment) | starts a thread on a commit, a file, or a line range |
+| [`reply`](#git-threads-reply) | replies to a thread, or to a specific message in one |
+| [`edit`](#git-threads-edit) | replaces the text of one of your messages (appends an edit event) |
+| [`delete`](#git-threads-delete) | retracts one of your messages (appends a tombstone) |
+| [`resolve`](#git-threads-resolve) | resolves a thread (`--reopen` to reopen) |
+| [`discard`](#git-threads-discard) | removes a drafted event before it's shared (`--all` for every draft) |
+| [`list`](#git-threads-list) | all threads, with their re-anchor status against your current code |
+| [`show`](#git-threads-show) | one thread: its code context (re-anchored) and conversation |
+| [`commit`](#git-threads-commit) | seals everything you've drafted into local history, as one batch |
+| [`push`](#git-threads-push) | shares your local discussion history (the fetch–union–push loop) |
+| [`pull`](#git-threads-pull) | fetches and integrates other people's discussion data |
+
 Two conventions apply everywhere:
 
 - **Any printed ID is a valid handle.** Wherever a command takes a thread, you can pass the
