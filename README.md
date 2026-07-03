@@ -10,6 +10,7 @@ their position is recomputed against whatever commit you're looking at.
 
 - **[How it works](docs/how-it-works.md)** — plain-language tour with diagrams, no git
   internals required
+- **[Command reference](docs/commands.md)** — every command: options, examples, behavior
 - **[Deep dives](docs/README.md)** — one document per subsystem: format, state fold, storage,
   sync, re-anchoring
 - **[SPEC.md](SPEC.md)** — the format specification (draft v0.1)

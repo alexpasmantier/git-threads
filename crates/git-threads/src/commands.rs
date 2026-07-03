@@ -134,7 +134,7 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
         new_threads: vec![NewThread { anchor, root, events: vec![] }],
         appends: vec![],
     })?;
-    println!("drafted thread {thread_id} (git threads publish to share)");
+    println!("drafted thread {thread_id} (commit and push to share)");
     Ok(thread_id)
 }
 

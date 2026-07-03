@@ -4,6 +4,8 @@ Start here:
 
 - **[How it works](how-it-works.md)** — the guided tour in plain language, with diagrams.
   No git internals required.
+- **[Command reference](commands.md)** — every `git threads` command: options, examples,
+  and behavior notes.
 
 Deep dives, one per subsystem — design rationale, exact mechanics, edge cases, and pointers
 into the spec and code:

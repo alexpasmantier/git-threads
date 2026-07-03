@@ -260,23 +260,11 @@ commit" — the same inputs always give the same answer, on every machine.
 
 ## The commands
 
-| command               | what it does                                                       |
-| --------------------- | ------------------------------------------------------------------ |
-| `git threads init`    | one-time setup of a clone: configures fetching of threads data     |
-| `git threads comment` | starts a thread on a commit, a file, or a line range               |
-| `git threads reply`   | replies to a thread, or to a specific message in one              |
-| `git threads edit`    | replaces the text of one of your messages (appends an edit event)  |
-| `git threads delete`  | retracts one of your messages (appends a tombstone)                |
-| `git threads resolve` | resolves a thread (`--reopen` to reopen)                           |
-| `git threads discard` | removes a drafted event before it's published (`--all` for every draft) |
-| `git threads show`    | one thread: its code context (re-anchored) and conversation        |
-| `git threads list`    | all threads, with their re-anchor status against your current code |
-| `git threads pull`    | fetches and integrates other people's discussion data              |
-| `git threads commit`  | seals everything you've drafted into local history, as one batch   |
-| `git threads push`    | shares your local discussion history (the fetch–union–push loop)   |
-
-Any ID the tool has ever printed works wherever a thread or message is expected — thread IDs
-and message IDs are interchangeable handles (and unique prefixes suffice).
+The full CLI — options, examples, and behavior notes for every command — has its own page:
+the **[command reference](commands.md)**. The shape in one line: `init` once per clone;
+`comment` / `reply` / `edit` / `delete` / `resolve` write drafts; `discard` takes drafts
+back; `list` / `show` read (re-anchored to your checkout); `commit` seals a session locally;
+`push` / `pull` share and receive.
 
 ## Design principles, in one place
 
