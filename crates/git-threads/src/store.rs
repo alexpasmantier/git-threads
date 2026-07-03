@@ -28,6 +28,7 @@ pub struct Store {
 }
 
 /// A thread as read from the snapshot tree.
+#[derive(Clone)]
 pub struct ThreadRecord {
     pub id: ThreadId,
     pub anchor: Anchor,

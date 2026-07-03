@@ -175,3 +175,62 @@ fn root_commit_requires_explicit_base() {
     let err = commands::comment(&store, &on_root).unwrap_err();
     assert!(err.to_string().contains("--base"), "unexpected error: {err:#}");
 }
+
+#[test]
+fn edit_replaces_body_and_chains() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread_id = commands::comment(&store, &opts("orignal")).unwrap();
+
+    let first_edit = commands::edit(&store, thread_id.as_str(), "original").unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    let folded = fold_thread(thread.events.clone());
+    assert_eq!(folded.events[0].effective_body.as_deref(), Some("original"));
+    assert!(folded.events[0].edited);
+    // The stored root body is untouched: edits are append-only events.
+    assert_eq!(thread.events.iter().find(|(id, _)| *id == thread_id).unwrap().1.body.as_deref(), Some("orignal"));
+
+    // A second edit supersedes the first edit (the chain tip), not the root.
+    let second_edit = commands::edit(&store, thread_id.as_str(), "original, take 3").unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    let event = &thread.events.iter().find(|(id, _)| *id == second_edit).unwrap().1;
+    assert_eq!(event.supersedes, Some(first_edit));
+    let folded = fold_thread(thread.events);
+    assert_eq!(folded.events[0].effective_body.as_deref(), Some("original, take 3"));
+}
+
+#[test]
+fn delete_retracts_and_blocks_further_edits() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread_id = commands::comment(&store, &opts("root")).unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "oops, wrong thread").unwrap();
+
+    commands::delete(&store, reply_id.as_str()).unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    let folded = fold_thread(thread.events);
+    let reply = folded.events.iter().find(|e| e.id == reply_id).unwrap();
+    assert!(reply.retracted);
+    // Content is tombstoned, not erased.
+    assert_eq!(reply.event.body.as_deref(), Some("oops, wrong thread"));
+
+    let err = commands::edit(&store, reply_id.as_str(), "revive").unwrap_err();
+    assert!(err.to_string().contains("retracted"), "unexpected error: {err:#}");
+    let err = commands::delete(&store, reply_id.as_str()).unwrap_err();
+    assert!(err.to_string().contains("already retracted"), "unexpected error: {err:#}");
+}
+
+#[test]
+fn only_the_author_can_edit_or_delete() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread_id = commands::comment(&store, &opts("mine")).unwrap();
+
+    git(dir.path(), &["config", "user.name", "Mallory"]);
+    git(dir.path(), &["config", "user.email", "mallory@example.com"]);
+    let store = Store::open(dir.path()).unwrap();
+    let err = commands::edit(&store, thread_id.as_str(), "hijacked").unwrap_err();
+    assert!(err.to_string().contains("only the author"), "unexpected error: {err:#}");
+    let err = commands::delete(&store, thread_id.as_str()).unwrap_err();
+    assert!(err.to_string().contains("only the author"), "unexpected error: {err:#}");
+}

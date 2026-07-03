@@ -2,8 +2,9 @@ use crate::reanchor::{self, Reanchor};
 use crate::store::{Append, Batch, Integration, NewThread, Store, ThreadRecord};
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
-    Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, GitOid, LineRange,
-    ReanchorStatus, Side, SnippetTarget, ThreadId, Timestamp, derive_snippet, fold_thread,
+    Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, FoldedEvent, GitOid,
+    LineRange, ReanchorStatus, Side, SnippetTarget, ThreadId, Timestamp, derive_snippet,
+    fold_thread,
 };
 use gix::ObjectId;
 use std::path::Path;
@@ -153,6 +154,64 @@ pub fn reply(store: &Store, thread_prefix: &str, message: &str) -> Result<EventI
     Ok(event_id)
 }
 
+/// Edit a comment or reply: append an `edit` event superseding the current
+/// tip of the target's edit chain (SPEC.md §2.1). Only the author's edits
+/// take effect in the fold, so anyone else's are rejected here.
+pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId> {
+    let (thread, target) = find_message(store, event_prefix)?;
+    let me = identity(store.repo())?;
+    if target.event.author.email != me.email {
+        bail!(
+            "{} was written by {} <{}>; only the author can edit it",
+            short(&target.id),
+            target.event.author.name,
+            target.event.author.email
+        );
+    }
+    if target.retracted {
+        bail!("{} is retracted; nothing to edit", short(&target.id));
+    }
+    let event = new_event(store.repo(), EventKind::Edit, |e| {
+        e.body = Some(message.to_string());
+        e.supersedes = Some(target.chain_tip.clone());
+    })?;
+    let event_id = event.id()?;
+    store.write(&Batch {
+        new_threads: vec![],
+        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
+    })?;
+    println!("edited {} (edit event {})", short(&target.id), short(&event_id));
+    Ok(event_id)
+}
+
+/// Retract a comment or reply with a `delete` tombstone (SPEC.md §2.1). The
+/// content stays in history; the fold marks the event retracted.
+pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
+    let (thread, target) = find_message(store, event_prefix)?;
+    let me = identity(store.repo())?;
+    if target.event.author.email != me.email {
+        bail!(
+            "{} was written by {} <{}>; only the author can retract it",
+            short(&target.id),
+            target.event.author.name,
+            target.event.author.email
+        );
+    }
+    if target.retracted {
+        bail!("{} is already retracted", short(&target.id));
+    }
+    let event = new_event(store.repo(), EventKind::Delete, |e| {
+        e.supersedes = Some(target.id.clone());
+    })?;
+    let event_id = event.id()?;
+    store.write(&Batch {
+        new_threads: vec![],
+        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
+    })?;
+    println!("retracted {}", short(&target.id));
+    Ok(event_id)
+}
+
 /// Mark a thread resolved (or reopen it).
 pub fn resolve(store: &Store, thread_prefix: &str, resolved: bool) -> Result<()> {
     let thread = find_thread(store, thread_prefix)?;
@@ -277,8 +336,11 @@ pub fn show(store: &Store, thread_prefix: &str, at: &str) -> Result<()> {
         let marker = if event.event.kind == EventKind::Reply { "↳ " } else { "● " };
         let edited = if event.edited { " (edited)" } else { "" };
         println!(
-            "{marker}{} <{}> {}{edited}",
-            event.event.author.name, event.event.author.email, event.event.ts
+            "{marker}{}  {} <{}> {}{edited}",
+            short(&event.id),
+            event.event.author.name,
+            event.event.author.email,
+            event.event.ts
         );
         if event.retracted {
             println!("  [retracted]");
@@ -476,6 +538,28 @@ fn parse_lines(spec: &str) -> Result<LineRange> {
             .map_err(|_| anyhow!("invalid --lines {spec:?}: expected N or N-M"))
     };
     Ok(LineRange { start: parse(start)?, end: parse(end)? })
+}
+
+/// Find a comment or reply by event-ID prefix across all threads, returning
+/// its thread and its folded state (chain tip, retraction).
+fn find_message(store: &Store, prefix: &str) -> Result<(ThreadRecord, FoldedEvent)> {
+    let mut matches: Vec<(ThreadRecord, FoldedEvent)> = Vec::new();
+    for thread in store.threads()? {
+        let folded = fold_thread(thread.events.clone());
+        for event in folded.events {
+            if event.id.as_str().starts_with(prefix) {
+                matches.push((thread.clone(), event));
+            }
+        }
+    }
+    match matches.len() {
+        0 => bail!("no comment or reply matches {prefix:?}"),
+        1 => Ok(matches.remove(0)),
+        n => bail!(
+            "{prefix:?} is ambiguous ({n} matches): {}",
+            matches.iter().map(|(_, e)| short(&e.id)).collect::<Vec<_>>().join(", ")
+        ),
+    }
 }
 
 fn find_thread(store: &Store, prefix: &str) -> Result<ThreadRecord> {

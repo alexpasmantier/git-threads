@@ -47,6 +47,19 @@ enum Command {
         #[arg(short, long)]
         message: String,
     },
+    /// Edit a comment or reply (appends an edit event; history is preserved)
+    Edit {
+        /// Event ID (or unique prefix) of the comment or reply, as shown by `show`
+        event: String,
+        /// Replacement text
+        #[arg(short, long)]
+        message: String,
+    },
+    /// Retract a comment or reply (appends a tombstone; content stays in history)
+    Delete {
+        /// Event ID (or unique prefix) of the comment or reply, as shown by `show`
+        event: String,
+    },
     /// Mark a thread resolved
     Resolve {
         /// Thread ID (or unique prefix)
@@ -122,6 +135,14 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Reply { thread, message } => {
             commands::reply(&store, &thread, &message)?;
+            Ok(())
+        }
+        Command::Edit { event, message } => {
+            commands::edit(&store, &event, &message)?;
+            Ok(())
+        }
+        Command::Delete { event } => {
+            commands::delete(&store, &event)?;
             Ok(())
         }
         Command::Resolve { thread, reopen } => commands::resolve(&store, &thread, !reopen),

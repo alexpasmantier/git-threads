@@ -16,6 +16,9 @@ pub struct FoldedEvent {
     pub event: Event,
     /// Body after applying the winning edit chain (SPEC.md §2.4 rule 1).
     pub effective_body: Option<String>,
+    /// Last event of the winning edit chain (the event itself when unedited).
+    /// A further edit should supersede this to keep the chain linear.
+    pub chain_tip: EventId,
     pub edited: bool,
     pub retracted: bool,
 }
@@ -104,6 +107,7 @@ pub fn fold_thread(events: impl IntoIterator<Item = (EventId, Event)>) -> Folded
                 id: id.clone(),
                 event: event.clone(),
                 effective_body,
+                chain_tip: current.clone(),
                 edited,
                 retracted,
             }
