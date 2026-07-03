@@ -61,6 +61,7 @@ Every event is one JSON document:
 
 - **Event ID** = lowercase hex SHA-256 of the event's canonical JSON serialization (§6), truncated to 40 characters. The event's filename is its ID. Content addressing makes merges idempotent: the same event always lands at the same path.
 - **Thread ID** = the event ID of its root `comment`.
+- Event and thread IDs are defined by this format alone — never by the storage backend's hashing. Object IDs appearing in anchors (`diff`, `blob`) are opaque hex strings scoped to the repository's storage backend; a backend hash migration (e.g. git SHA-1 → SHA-256) changes those, but can never invalidate event IDs or the references between events.
 
 ### 2.4 State fold (normative)
 
@@ -222,6 +223,7 @@ Format & semantics
 - **Suggested changes**: patch-carrying events (GitHub "suggestion" blocks) applied with `git apply`; attachments already give them a reachable home.
 - **Review verdicts**: approve / request-changes events; per-review summary rollup.
 - **Patchset tracking** (Gerrit-style): link successive heads of a rebased series (via `range-diff`) so threads follow a PR across force-pushes.
+- **Stable change identities**: an optional `change_id` anchor field for backends with rebase-stable identities (jj change IDs, Gerrit Change-Ids), letting a thread follow a logical change across history rewrites — complementing, and possibly subsuming, patchset tracking.
 - **Reactions** (👍 events), **labels/tags** on threads.
 - **Sub-line anchors**: activate the reserved `cols` field (agents want exact spans).
 - **Cross-file re-anchoring**: content search beyond the anchored path (survives file splits); high false-positive risk, spec as an interactive client extension with distinct status.
@@ -248,5 +250,6 @@ Open questions
 - Second-precision timestamps make same-second updates order-undefined beyond the deterministic ID tie-break (e.g. a resolve→reopen toggle within one second, or a reply displaying before its root). Convergence is unaffected; causal intuition is. Millisecond precision, or a per-writer logical counter?
 - Threading model for `edit` by non-authors (moderation?).
 - Anchors into submodules.
+- jj colocated repos are expected to work unmodified (the git backend stores real refs and objects) — verify, and check that anchored-commit retention holds under jj's own GC of hidden commits.
 - Very large monorepo path indexing.
 - Privacy: thread data is world-readable to anyone with repo access; is per-thread encryption ever worth the complexity?
