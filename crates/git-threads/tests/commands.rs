@@ -144,6 +144,9 @@ fn reply_and_resolve_round_trip_through_fold() {
         .expect("reply present");
     assert_eq!(reply.event.in_reply_to, Some(thread_id.clone()));
 
+    // Same-second resolve toggles are order-undefined (LWW ties break on
+    // event-ID hash), so give the reopen a strictly later timestamp.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
     commands::resolve(&store, thread_id.as_str(), false).unwrap();
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
     assert!(!fold_thread(thread.events).resolved);

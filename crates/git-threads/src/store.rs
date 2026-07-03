@@ -291,6 +291,135 @@ impl Store {
     }
 }
 
+/// Outcome of integrating a remote tip into the local ref (SPEC.md §7.2).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Integration {
+    UpToDate,
+    /// Local ref did not exist; it now points at the remote tip.
+    Initialized,
+    FastForwarded,
+    /// Histories diverged; a tree-union merge commit was created.
+    Merged,
+}
+
+impl Store {
+    /// The local tracking ref for `remote`'s threads data (SPEC.md §7.1).
+    pub fn tracking_ref(remote: &str) -> String {
+        format!("refs/threads/remotes/{remote}/data")
+    }
+
+    /// Tip of the tracking ref for `remote`, if present.
+    pub fn tracking_tip(&self, remote: &str) -> Result<Option<ObjectId>> {
+        match self.repo.try_find_reference(&Self::tracking_ref(remote))? {
+            Some(mut reference) => Ok(Some(reference.peel_to_id()?.detach())),
+            None => Ok(None),
+        }
+    }
+
+    /// Integrate a fetched remote tip into `refs/threads/data` (SPEC.md §7.2
+    /// step 2): no-op if already contained, fast-forward if possible,
+    /// otherwise a tree-union merge with both tips as parents.
+    pub fn integrate(&self, remote_tip: ObjectId) -> Result<Integration> {
+        let Some(local) = self.tip()? else {
+            self.update_ref(None, remote_tip, "git-threads: initialize from remote")?;
+            return Ok(Integration::Initialized);
+        };
+        if local == remote_tip || self.is_ancestor(remote_tip, local)? {
+            return Ok(Integration::UpToDate);
+        }
+        if self.is_ancestor(local, remote_tip)? {
+            self.update_ref(Some(local), remote_tip, "git-threads: fast-forward")?;
+            return Ok(Integration::FastForwarded);
+        }
+        let local_tree = self.repo.find_commit(local)?.tree_id()?.detach();
+        let remote_tree = self.repo.find_commit(remote_tip)?.tree_id()?.detach();
+        let merged_tree = self.union_trees(local_tree, remote_tree)?;
+        self.commit(
+            "threads: merge remote",
+            merged_tree,
+            vec![local, remote_tip],
+            Some(local),
+        )?;
+        Ok(Integration::Merged)
+    }
+
+    fn update_ref(&self, expected: Option<ObjectId>, to: ObjectId, log: &str) -> Result<()> {
+        let previous = match expected {
+            Some(tip) => PreviousValue::MustExistAndMatch(tip.into()),
+            None => PreviousValue::MustNotExist,
+        };
+        self.repo
+            .reference(DATA_REF, to, previous, log)
+            .context("failed to update refs/threads/data (concurrent write?)")?;
+        Ok(())
+    }
+
+    fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> Result<bool> {
+        if ancestor == descendant {
+            return Ok(true);
+        }
+        for info in self.repo.rev_walk([descendant]).all()? {
+            if info?.id == ancestor {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Recursive tree union (SPEC.md §7.2). Writers only add uniquely named
+    /// content-addressed files, so identical paths carry identical blobs and
+    /// there is no conflict case. Divergence at a path is only possible with
+    /// malformed data; it resolves deterministically (trees over blobs, then
+    /// larger object ID) so all replicas converge on the same result.
+    fn union_trees(&self, ours: ObjectId, theirs: ObjectId) -> Result<ObjectId> {
+        use gix::objs::tree::{Entry, EntryMode};
+        use std::collections::BTreeMap;
+
+        if ours == theirs {
+            return Ok(ours);
+        }
+        let read = |id: ObjectId| -> Result<BTreeMap<gix::bstr::BString, (EntryMode, ObjectId)>> {
+            let tree = self.repo.find_tree(id)?;
+            let mut entries = BTreeMap::new();
+            for entry in tree.iter() {
+                let entry = entry?;
+                entries.insert(
+                    entry.filename().to_owned(),
+                    (entry.mode(), entry.object_id()),
+                );
+            }
+            Ok(entries)
+        };
+        let our_entries = read(ours)?;
+        let their_entries = read(theirs)?;
+
+        let mut merged: Vec<Entry> = Vec::new();
+        let names: BTreeSet<&gix::bstr::BString> =
+            our_entries.keys().chain(their_entries.keys()).collect();
+        for name in names {
+            let (mode, oid) = match (our_entries.get(name), their_entries.get(name)) {
+                (Some(entry), None) | (None, Some(entry)) => *entry,
+                (Some(&(our_mode, our_oid)), Some(&(their_mode, their_oid))) => {
+                    if our_oid == their_oid && our_mode == their_mode {
+                        (our_mode, our_oid)
+                    } else if our_mode.is_tree() && their_mode.is_tree() {
+                        (our_mode, self.union_trees(our_oid, their_oid)?)
+                    } else {
+                        // Malformed data: same path, different content.
+                        // Deterministic pick so every replica converges.
+                        let ours_wins = (our_mode.is_tree(), our_oid) > (their_mode.is_tree(), their_oid);
+                        if ours_wins { (our_mode, our_oid) } else { (their_mode, their_oid) }
+                    }
+                }
+                (None, None) => unreachable!(),
+            };
+            merged.push(Entry { mode, filename: name.clone(), oid });
+        }
+        merged.sort();
+        Ok(self.repo.write_object(&gix::objs::Tree { entries: merged })?.detach())
+    }
+}
+
 /// `threads/<first-2-hex>/<thread-id>` (SPEC.md §5.1).
 fn thread_dir(id: &ThreadId) -> String {
     format!("threads/{}/{}", &id.as_str()[..2], id)
