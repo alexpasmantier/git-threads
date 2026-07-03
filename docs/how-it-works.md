@@ -12,7 +12,7 @@ full mechanics of each subsystem, see the [deep dives](README.md).
 
 When you review code on GitHub or GitLab, the conversation lives on their servers, not in your
 repository. Move to another host and the discussion stays behind. Work offline and you can't
-read it. Five years later, when you wonder *why* a strange line of code exists, the answer is
+read it. Five years later, when you wonder _why_ a strange line of code exists, the answer is
 in a PR discussion you may no longer be able to find — if it exists at all.
 
 Code travels with the repository. git-threads makes the conversation travel with it too.
@@ -43,13 +43,13 @@ flowchart LR
 
 There are five event types:
 
-| event | what it means |
-|---|---|
-| `comment` | starts the thread; every thread has exactly one |
-| `reply` | answers an earlier event |
-| `edit` | replaces the text of an earlier comment or reply (by the same author) |
-| `resolve` | marks the thread resolved or reopens it |
-| `delete` | retracts an earlier message (a tombstone — the text stays in history but is no longer shown) |
+| event     | what it means                                                                                |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `comment` | starts the thread; every thread has exactly one                                              |
+| `reply`   | answers an earlier event                                                                     |
+| `edit`    | replaces the text of an earlier comment or reply (by the same author)                        |
+| `resolve` | marks the thread resolved or reopens it                                                      |
+| `delete`  | retracts an earlier message (a tombstone — the text stays in history but is no longer shown) |
 
 An event is a small JSON document:
 
@@ -138,7 +138,7 @@ handles the rest: thousands of structurally similar small JSON files pack down v
 
 ## From events to what you see: the fold
 
-Append-only events are the storage format, not the display format. What you *see* — current
+Append-only events are the storage format, not the display format. What you _see_ — current
 text after edits, resolved or not, messages in order — is computed by replaying the events
 with a fixed set of rules, called the **fold**:
 
@@ -157,7 +157,7 @@ two people's events just get pooled together, and the fold sorts out the rest.
 Discussions move between people the same way code does: push and fetch. But git-threads never
 lets a fetch stomp on your local data. Fetched remote state lands in a separate **tracking
 pointer** (`refs/threads/remotes/origin/data` — same idea as `origin/main` for branches), and
-is then explicitly *integrated* into your local data. Publishing is a three-step loop:
+is then explicitly _integrated_ into your local data. Publishing is a three-step loop:
 
 ```mermaid
 sequenceDiagram
@@ -176,7 +176,7 @@ sequenceDiagram
 ```
 
 The step that makes this safe is the **union merge**. Because every event file's name is its
-content fingerprint, two people can never create *different* files at the *same* path. So
+content fingerprint, two people can never create _different_ files at the _same_ path. So
 integrating remote data is literally "take the union of both file sets" — there is no such
 thing as a merge conflict. Even a genuinely concurrent disagreement (you resolve a thread
 while I reopen it) isn't a conflict at the storage layer: both events are kept, and the fold
@@ -249,18 +249,18 @@ commit" — the same inputs always give the same answer, on every machine.
 
 ## The commands
 
-| command | what it does |
-|---|---|
-| `git threads init` | one-time setup of a clone: configures fetching of threads data |
-| `git threads comment` | starts a thread on a commit, a file, or a line range |
-| `git threads reply` | replies to a thread |
-| `git threads edit` | replaces the text of one of your messages (appends an edit event) |
-| `git threads delete` | retracts one of your messages (appends a tombstone) |
-| `git threads resolve` | resolves a thread (`--reopen` to reopen) |
-| `git threads show` | one thread: its code context (re-anchored) and conversation |
-| `git threads list` | all threads, with their re-anchor status against your current code |
-| `git threads pull` | fetches and integrates other people's discussion data |
-| `git threads publish` | shares your local discussion data (the fetch–union–push loop) |
+| command               | what it does                                                       |
+| --------------------- | ------------------------------------------------------------------ |
+| `git threads init`    | one-time setup of a clone: configures fetching of threads data     |
+| `git threads comment` | starts a thread on a commit, a file, or a line range               |
+| `git threads reply`   | replies to a thread                                                |
+| `git threads edit`    | replaces the text of one of your messages (appends an edit event)  |
+| `git threads delete`  | retracts one of your messages (appends a tombstone)                |
+| `git threads resolve` | resolves a thread (`--reopen` to reopen)                           |
+| `git threads show`    | one thread: its code context (re-anchored) and conversation        |
+| `git threads list`    | all threads, with their re-anchor status against your current code |
+| `git threads pull`    | fetches and integrates other people's discussion data              |
+| `git threads publish` | shares your local discussion data (the fetch–union–push loop)      |
 
 ## Design principles, in one place
 

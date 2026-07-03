@@ -138,12 +138,14 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     Ok(thread_id)
 }
 
-/// Reply to an existing thread (found by ID prefix).
-pub fn reply(store: &Store, thread_prefix: &str, message: &str) -> Result<EventId> {
-    let thread = find_thread(store, thread_prefix)?;
+/// Reply to a thread, or to a specific message in one: the prefix may name
+/// the thread or any comment/reply in it, and `in_reply_to` records the
+/// named event (SPEC.md §2.1 allows replying to any event in the thread).
+pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
+    let (thread, target) = find_message(store, prefix)?;
     let event = new_event(store.repo(), EventKind::Reply, |e| {
         e.body = Some(message.to_string());
-        e.in_reply_to = Some(thread.id.clone());
+        e.in_reply_to = Some(target.id.clone());
     })?;
     let event_id = event.id()?;
     store.write(&Batch {
@@ -212,9 +214,10 @@ pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
     Ok(event_id)
 }
 
-/// Mark a thread resolved (or reopen it).
-pub fn resolve(store: &Store, thread_prefix: &str, resolved: bool) -> Result<()> {
-    let thread = find_thread(store, thread_prefix)?;
+/// Mark a thread resolved (or reopen it). The prefix may name the thread or
+/// any comment/reply in it.
+pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
+    let (thread, _) = find_message(store, prefix)?;
     let event = new_event(store.repo(), EventKind::Resolve, |e| {
         e.resolved = Some(resolved);
     })?;
@@ -280,9 +283,10 @@ pub fn list(store: &Store, at: &str) -> Result<()> {
 /// Render a thread: anchor location, re-anchor placement on `at` (SPEC.md
 /// §4.2), code context, and the folded conversation. The context comes from
 /// the re-anchored location when there is one, from the anchor's own diff
-/// when outdated (§4.2 step 4).
-pub fn show(store: &Store, thread_prefix: &str, at: &str) -> Result<()> {
-    let thread = find_thread(store, thread_prefix)?;
+/// when outdated (§4.2 step 4). The prefix may name the thread or any
+/// comment/reply in it.
+pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
+    let (thread, _) = find_message(store, prefix)?;
     let folded = fold_thread(thread.events.clone());
     let anchor = &thread.anchor;
 
@@ -558,22 +562,6 @@ fn find_message(store: &Store, prefix: &str) -> Result<(ThreadRecord, FoldedEven
         n => bail!(
             "{prefix:?} is ambiguous ({n} matches): {}",
             matches.iter().map(|(_, e)| short(&e.id)).collect::<Vec<_>>().join(", ")
-        ),
-    }
-}
-
-fn find_thread(store: &Store, prefix: &str) -> Result<ThreadRecord> {
-    let mut matches: Vec<ThreadRecord> = store
-        .threads()?
-        .into_iter()
-        .filter(|t| t.id.as_str().starts_with(prefix))
-        .collect();
-    match matches.len() {
-        0 => bail!("no thread matches {prefix:?}"),
-        1 => Ok(matches.remove(0)),
-        n => bail!(
-            "{prefix:?} is ambiguous ({n} matches): {}",
-            matches.iter().map(|t| short(&t.id)).collect::<Vec<_>>().join(", ")
         ),
     }
 }

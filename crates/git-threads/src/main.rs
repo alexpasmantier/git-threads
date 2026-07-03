@@ -39,9 +39,9 @@ enum Command {
         #[arg(long)]
         base: Option<String>,
     },
-    /// Reply to a thread
+    /// Reply to a thread, or to a specific message in one
     Reply {
-        /// Thread ID (or unique prefix)
+        /// Thread ID, or the ID of the comment/reply being answered (or a unique prefix)
         thread: String,
         /// Reply text
         #[arg(short, long)]
@@ -62,7 +62,7 @@ enum Command {
     },
     /// Mark a thread resolved
     Resolve {
-        /// Thread ID (or unique prefix)
+        /// Thread ID or the ID of any message in it (or a unique prefix)
         thread: String,
         /// Reopen instead of resolving
         #[arg(long)]
@@ -70,7 +70,7 @@ enum Command {
     },
     /// Show a thread: anchor context and conversation
     Show {
-        /// Thread ID (or unique prefix)
+        /// Thread ID or the ID of any message in it (or a unique prefix)
         thread: String,
         /// Commit to re-anchor the thread against
         #[arg(long, default_value = "HEAD")]

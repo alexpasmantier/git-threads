@@ -159,7 +159,7 @@ fn thread_prefix_lookup_errors() {
     commands::comment(&store, &opts("only thread")).unwrap();
 
     let err = commands::reply(&store, "ffffffff", "to nobody").unwrap_err();
-    assert!(err.to_string().contains("no thread matches"));
+    assert!(err.to_string().contains("no comment or reply matches"));
     // Empty prefix matches everything — fine with one thread, ambiguous needs 2+.
     commands::comment(&store, &opts("second thread")).unwrap();
     let err = commands::reply(&store, "", "to everybody").unwrap_err();
@@ -233,4 +233,23 @@ fn only_the_author_can_edit_or_delete() {
     assert!(err.to_string().contains("only the author"), "unexpected error: {err:#}");
     let err = commands::delete(&store, thread_id.as_str()).unwrap_err();
     assert!(err.to_string().contains("only the author"), "unexpected error: {err:#}");
+}
+
+#[test]
+fn replying_to_a_reply_targets_it_within_the_same_thread() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread_id = commands::comment(&store, &opts("root question")).unwrap();
+    let first_reply = commands::reply(&store, thread_id.as_str(), "first answer").unwrap();
+
+    // Reply by naming the reply, not the thread.
+    let second_reply = commands::reply(&store, first_reply.as_str(), "disagree with that").unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().expect("same thread");
+    let event = &thread.events.iter().find(|(id, _)| *id == second_reply).unwrap().1;
+    assert_eq!(event.in_reply_to, Some(first_reply.clone()));
+
+    // resolve accepts any message ID from the thread too.
+    commands::resolve(&store, second_reply.as_str(), true).unwrap();
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    assert!(fold_thread(thread.events).resolved);
 }
