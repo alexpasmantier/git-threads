@@ -166,17 +166,21 @@ Do not pre-compress or binary-encode anything: git packfiles (zlib + delta chain
 `init` adds a single fetch refspec to the shared remote:
 
 ```
-fetch = +refs/threads/*:refs/threads/*
+fetch = +refs/threads/data:refs/threads/remotes/<remote>/data
 ```
 
-Fetch refspecs are additive, so this augments normal fetches. No push refspec is configured: setting `remote.<name>.push` *replaces* git's default push behavior for the clone (a bare `git push` would stop pushing the current branch). Publishing instead pushes explicitly — `git push <remote> refs/threads/data:refs/threads/data` — as part of the publish loop (§7.2).
+Fetch refspecs are additive, so this augments normal fetches. Two deliberate asymmetries:
+
+- **Remote state lands in a tracking ref, never directly on `refs/threads/data`.** A direct `+refs/threads/*:refs/threads/*` mapping would let any fetch force-overwrite the local ref, making unpublished local events unreachable. Integration into the local ref is an explicit step (§7.2): fast-forward when possible, union merge otherwise — exactly git's own branch/tracking-ref model. The tracking ref lives under the format's own namespace (not `refs/remotes/*`, which a branch named `threads/data` could collide with).
+- **No push refspec is configured**: setting `remote.<name>.push` *replaces* git's default push behavior for the clone (a bare `git push` would stop pushing the current branch). Publishing instead pushes explicitly — `git push <remote> refs/threads/data:refs/threads/data` — as part of the publish loop (§7.2).
 
 Tools MUST self-heal this configuration (git config and hooks are per-clone by design; "install the tool, run any command once" is the setup floor — the git-lfs pattern).
 
 ### 7.2 Publish loop
 
-1. Build new tip: previous tip's tree + new event files; commit (with anchored-commit parents, §5.2); update local ref.
-2. Push. On non-fast-forward rejection: fetch, merge with **tree union** (`git merge-tree --write-tree`), commit the merge (both heads as parents), retry.
+1. **Fetch** the remote's `refs/threads/data` into the tracking ref (§7.1).
+2. **Integrate** the tracking ref into the local `refs/threads/data`: no-op if already contained, fast-forward if the local ref is an ancestor, otherwise a **tree union** merge — the union of both tip trees, committed with both tips as parents. Local ref updates are compare-and-swap on the expected tip.
+3. **Push** the local ref explicitly. On non-fast-forward rejection (a concurrent publish won the race), go to 1.
 
 Because writers only ever add files with content-addressed unique names, the union has **no conflict case**; the loop always converges. Concurrent `resolve` toggles reconcile via the state fold (§2.4), not at merge time.
 
@@ -237,6 +241,7 @@ Tooling
 
 Open questions
 
+- Second-precision timestamps make same-second updates order-undefined beyond the deterministic ID tie-break (e.g. a resolve→reopen toggle within one second, or a reply displaying before its root). Convergence is unaffected; causal intuition is. Millisecond precision, or a per-writer logical counter?
 - Threading model for `edit` by non-authors (moderation?).
 - Anchors into submodules.
 - Very large monorepo path indexing.

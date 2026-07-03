@@ -1,8 +1,8 @@
-use crate::store::{Append, Batch, NewThread, Store, ThreadRecord};
+use crate::store::{Append, Batch, Integration, NewThread, Store, ThreadRecord};
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
     Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, GitOid, LineRange, Side,
-    ThreadId, Timestamp, fold_thread,
+    SnippetTarget, ThreadId, Timestamp, derive_snippet, fold_thread,
 };
 use gix::ObjectId;
 use std::path::Path;
@@ -197,6 +197,155 @@ pub fn list(store: &Store) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Render a thread: anchor location, code context, and the folded conversation.
+pub fn show(store: &Store, thread_prefix: &str) -> Result<()> {
+    let thread = find_thread(store, thread_prefix)?;
+    let folded = fold_thread(thread.events.clone());
+    let anchor = &thread.anchor;
+
+    let status = if folded.resolved { "resolved" } else { "open" };
+    println!("thread {}  [{status}]", thread.id);
+    let side = match anchor.side {
+        Some(Side::Old) => " (old side)",
+        _ => "",
+    };
+    let location = match (&anchor.path, &anchor.lines) {
+        (Some(path), Some(lines)) => format!("{path}:{}-{}{side}", lines.start, lines.end),
+        (Some(path), None) => format!("{path}{side}"),
+        _ => "whole change".to_string(),
+    };
+    println!(
+        "on {location} of {}..{}",
+        &anchor.diff.base.as_str()[..12],
+        &anchor.diff.head.as_str()[..12]
+    );
+
+    if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
+        let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
+        let data = &store.repo().find_blob(blob_id)?.data;
+        let content = String::from_utf8_lossy(data);
+        if let Some(snippet) = derive_snippet(&content, lines) {
+            println!();
+            fn print_line(line_no: &mut u32, line: &str, marked: bool) {
+                println!("{} {line_no:>5} │ {line}", if marked { ">" } else { " " });
+                *line_no += 1;
+            }
+            let mut line_no = snippet.first_line;
+            for line in &snippet.before {
+                print_line(&mut line_no, line, false);
+            }
+            match &snippet.target {
+                SnippetTarget::Full(lines) => {
+                    for line in lines {
+                        print_line(&mut line_no, line, true);
+                    }
+                }
+                SnippetTarget::Truncated { head, tail, omitted, .. } => {
+                    for line in head {
+                        print_line(&mut line_no, line, true);
+                    }
+                    println!("        ⋮ {omitted} lines omitted");
+                    line_no += *omitted as u32;
+                    for line in tail {
+                        print_line(&mut line_no, line, true);
+                    }
+                }
+            }
+            for line in &snippet.after {
+                print_line(&mut line_no, line, false);
+            }
+        }
+    }
+
+    for event in &folded.events {
+        println!();
+        let marker = if event.event.kind == EventKind::Reply { "↳ " } else { "● " };
+        let edited = if event.edited { " (edited)" } else { "" };
+        println!(
+            "{marker}{} <{}> {}{edited}",
+            event.event.author.name, event.event.author.email, event.event.ts
+        );
+        if event.retracted {
+            println!("  [retracted]");
+        } else if let Some(body) = &event.effective_body {
+            for line in body.lines() {
+                println!("  {line}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fetch the remote's threads data into the tracking ref and integrate it
+/// into the local ref (SPEC.md §7.2 steps 1–2).
+pub fn pull(store: &Store, remote: &str) -> Result<()> {
+    match fetch_and_integrate(store, remote)? {
+        None => println!("no threads data on {remote}"),
+        Some(Integration::UpToDate) => println!("already up to date"),
+        Some(Integration::Initialized) => println!("initialized from {remote}"),
+        Some(Integration::FastForwarded) => println!("fast-forwarded to {remote}"),
+        Some(Integration::Merged) => println!("merged threads from {remote}"),
+    }
+    Ok(())
+}
+
+/// The publish loop (SPEC.md §7.2): integrate remote state, push, and on a
+/// lost race re-integrate and retry.
+pub fn publish(store: &Store, remote: &str) -> Result<()> {
+    let workdir = workdir(store)?;
+    const MAX_ATTEMPTS: usize = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        fetch_and_integrate(store, remote)?;
+        if store.tip()?.is_none() {
+            println!("nothing to publish");
+            return Ok(());
+        }
+        match git(&workdir, &["push", remote, "refs/threads/data:refs/threads/data"]) {
+            Ok(_) => {
+                println!("published to {remote}");
+                return Ok(());
+            }
+            Err(err) => {
+                let lost_race = err.to_string().contains("[rejected]")
+                    || err.to_string().contains("non-fast-forward")
+                    || err.to_string().contains("fetch first")
+                    || err.to_string().contains("stale info");
+                if !lost_race || attempt == MAX_ATTEMPTS {
+                    return Err(err.context(format!("publish failed after {attempt} attempt(s)")));
+                }
+                eprintln!("push rejected (concurrent publish), retrying ({attempt}/{MAX_ATTEMPTS})");
+            }
+        }
+    }
+    unreachable!("loop returns on success or error");
+}
+
+/// Fetch into the tracking ref and integrate. `None` means the remote has no
+/// threads data yet. The explicit refspec makes this work (and self-heal)
+/// even without the configured refspec from `init`.
+fn fetch_and_integrate(store: &Store, remote: &str) -> Result<Option<Integration>> {
+    let workdir = workdir(store)?;
+    let refspec = format!("+refs/threads/data:{}", Store::tracking_ref(remote));
+    if let Err(err) = git(&workdir, &["fetch", remote, &refspec]) {
+        if err.to_string().contains("couldn't find remote ref") {
+            return Ok(None);
+        }
+        return Err(err);
+    }
+    match store.tracking_tip(remote)? {
+        Some(remote_tip) => Ok(Some(store.integrate(remote_tip)?)),
+        None => Ok(None),
+    }
+}
+
+fn workdir(store: &Store) -> Result<std::path::PathBuf> {
+    Ok(store
+        .repo()
+        .workdir()
+        .context("this operation requires a non-bare repository")?
+        .to_owned())
 }
 
 fn new_event(

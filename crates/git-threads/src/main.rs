@@ -55,6 +55,23 @@ enum Command {
         #[arg(long)]
         reopen: bool,
     },
+    /// Show a thread: anchor context and conversation
+    Show {
+        /// Thread ID (or unique prefix)
+        thread: String,
+    },
+    /// Fetch and integrate threads data from a remote
+    Pull {
+        /// Remote to pull from
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+    /// Push local threads data to a remote (integrating remote state first)
+    Publish {
+        /// Remote to publish to
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
     /// List threads with their current state
     List,
 }
@@ -90,6 +107,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Resolve { thread, reopen } => commands::resolve(&store, &thread, !reopen),
+        Command::Show { thread } => commands::show(&store, &thread),
+        Command::Pull { remote } => commands::pull(&store, &remote),
+        Command::Publish { remote } => commands::publish(&store, &remote),
         Command::List => commands::list(&store),
     }
 }
