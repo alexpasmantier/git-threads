@@ -63,13 +63,17 @@ discussed. The anchor's granularity follows the flags:
 | `--file` | one file's change |
 | `--file --lines 120` or `--lines 120-128` | specific lines (1-based, inclusive) |
 
+`--file` also accepts the lines inline as `path:120` or `path:120-128` — the same shape
+`list` and `show` print, so locations can be pasted straight back in. Combining the
+suffix with `--lines` is an error.
+
 `--side old` anchors to the base version of the file (e.g. commenting on deleted lines);
 the default `new` is the version after the change. `--base` overrides the diff base — needed
 on a root commit, useful to pick a parent of a merge commit or a branch's merge-base.
 Line numbers are validated against the actual file.
 
 ```console
-$ git threads comment --file src/parser.rs --lines 120-128 -m "does this handle empty input?"
+$ git threads comment --file src/parser.rs:120-128 -m "does this handle empty input?"
 drafted thread 84727c6d0f7c21c40ee8768996a20f540d6b1304 (commit and push to share)
 ```
 

@@ -28,7 +28,7 @@ This repository dogfoods itself: its own review threads live on its `refs/thread
 $ cargo install --path crates/git-threads   # puts `git-threads` on PATH; git finds it as `git threads`
 
 $ git threads init                          # once per clone: fetch discussions too
-$ git threads comment --file src/parser.rs --lines 120-128 \
+$ git threads comment --file src/parser.rs:120-128 \
     -m "does this handle empty input?"      # start a thread on HEAD's change
 $ git threads list                          # threads, re-anchored to your checkout
 $ git threads show <thread-id>              # code context + conversation

@@ -26,7 +26,7 @@ enum Command {
         /// Commit whose change is being discussed
         #[arg(default_value = "HEAD")]
         commit: String,
-        /// Anchor the thread to this file
+        /// Anchor the thread to this file; may carry the lines directly, e.g. src/lib.rs:120-128
         #[arg(long)]
         file: Option<String>,
         /// Line or line range within --file, e.g. 120 or 120-128

@@ -77,7 +77,12 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     let (kind, path, lines, blob) = match (&opts.file, &opts.lines) {
         (None, None) => (AnchorKind::Commit, None, None, None),
         (None, Some(_)) => bail!("--lines requires --file"),
-        (Some(file), lines) => {
+        (Some(spec), lines) => {
+            let (file, suffix) = split_line_suffix(spec);
+            if suffix.is_some() && lines.is_some() {
+                bail!("--lines conflicts with the line suffix in --file {spec:?}");
+            }
+            let lines = suffix.or(lines.as_deref());
             // The blob is resolved on the anchor's side: `new` reads the head
             // tree, `old` the base tree (e.g. comments on deleted lines).
             let side_commit = match opts.side {
@@ -95,18 +100,17 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
                 )
             })?;
             let lines = lines
-                .as_deref()
                 .map(|spec| {
                     let range = parse_lines(spec)?;
                     if range.end as usize > line_count {
-                        bail!("--lines {spec} is out of range: {file:?} has {line_count} lines");
+                        bail!("lines {spec} are out of range: {file:?} has {line_count} lines");
                     }
                     Ok(range)
                 })
                 .transpose()?;
             let kind = if lines.is_some() { AnchorKind::Range } else { AnchorKind::File };
             let blob = GitOid::from_hex(blob_id.to_string())?;
-            (kind, Some(file.clone()), lines, Some(blob))
+            (kind, Some(file.to_string()), lines, Some(blob))
         }
     };
 
@@ -596,6 +600,18 @@ fn blob_at(
     let newlines = data.iter().filter(|b| **b == b'\n').count();
     let count = if data.is_empty() || data.ends_with(b"\n") { newlines } else { newlines + 1 };
     Ok(Some((entry.object_id(), count)))
+}
+
+/// Split a trailing `:N` / `:N-M` off a `--file` value (`src/lib.rs:120-128`),
+/// the same shape `list` and `show` print. The suffix only counts as lines
+/// when it parses as one, so a path that merely contains colons stays intact.
+fn split_line_suffix(spec: &str) -> (&str, Option<&str>) {
+    match spec.rsplit_once(':') {
+        Some((path, suffix)) if !path.is_empty() && parse_lines(suffix).is_ok() => {
+            (path, Some(suffix))
+        }
+        _ => (spec, None),
+    }
 }
 
 fn parse_lines(spec: &str) -> Result<LineRange> {

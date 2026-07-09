@@ -103,6 +103,29 @@ fn range_comment_resolves_blob_and_validates_lines() {
 }
 
 #[test]
+fn file_line_suffix_is_equivalent_to_lines() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+
+    let mut spec = opts("why is b empty?");
+    spec.file = Some("src/lib.rs:2-3".into());
+    let thread_id = commands::comment(&store, &spec).unwrap();
+
+    let thread = store.read_thread(&thread_id).unwrap().unwrap();
+    assert_eq!(thread.anchor.kind, AnchorKind::Range);
+    assert_eq!(thread.anchor.path.as_deref(), Some("src/lib.rs"));
+    let lines = thread.anchor.lines.unwrap();
+    assert_eq!((lines.start, lines.end), (2, 3));
+
+    // Explicit --lines alongside a suffix is a conflict, not a silent pick.
+    let mut both = opts("nope");
+    both.file = Some("src/lib.rs:2".into());
+    both.lines = Some("3".into());
+    let err = commands::comment(&store, &both).unwrap_err();
+    assert!(err.to_string().contains("conflicts"), "unexpected error: {err:#}");
+}
+
+#[test]
 fn old_side_comment_reads_base_blob() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
