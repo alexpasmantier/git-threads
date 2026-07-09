@@ -36,6 +36,12 @@ $ git threads commit                        # seal your drafts into local histor
 $ git threads push                          # share; safe under concurrent pushes
 ```
 
+Optional: install man pages so `git threads --help` works (git routes it to `man git-threads`):
+
+```console
+$ git threads mangen ~/.local/share/man/man1
+```
+
 Reading the raw data needs nothing but git:
 
 ```console

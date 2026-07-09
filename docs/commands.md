@@ -28,6 +28,11 @@ Two conventions apply everywhere:
   locally. Nothing enters shared history until `commit`, and nothing leaves your machine
   until `push`.
 
+This reference is also available as man pages: `git threads mangen <dir>` writes
+`git-threads(1)` and one page per subcommand, generated from the CLI definitions. Install
+them into a directory on your manpath (e.g. `~/.local/share/man/man1`) and
+`git threads --help` — which git routes to `man git-threads` — starts working.
+
 ## Setup
 
 ### `git threads init`

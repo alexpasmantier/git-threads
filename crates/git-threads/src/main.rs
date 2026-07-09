@@ -104,6 +104,13 @@ enum Command {
         #[arg(long, default_value = "HEAD")]
         at: String,
     },
+    /// Generate man pages into a directory (for packaging)
+    #[command(hide = true)]
+    Mangen {
+        /// Directory to write the pages into
+        #[arg(default_value = ".")]
+        out: std::path::PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -133,8 +140,15 @@ fn reset_sigpipe() {
 
 fn main() -> anyhow::Result<()> {
     reset_sigpipe();
+    let command = Cli::parse().command;
+    if let Command::Mangen { out } = command {
+        use clap::CommandFactory;
+        std::fs::create_dir_all(&out)?;
+        clap_mangen::generate_to(Cli::command(), &out)?;
+        return Ok(());
+    }
     let store = Store::discover()?;
-    match Cli::parse().command {
+    match command {
         Command::Init { remote } => commands::init(&store, &remote),
         Command::Comment { message, commit, file, lines, side, base } => {
             commands::comment(
@@ -166,5 +180,6 @@ fn main() -> anyhow::Result<()> {
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
         Command::List { at } => commands::list(&store, &at),
+        Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }
 }
