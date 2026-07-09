@@ -51,23 +51,24 @@ never ran `init` still works.
 ### `git threads comment`
 
 ```
-git threads comment [COMMIT] [-m <text>] [--file <path> [--lines N | N-M] [--side old|new]] [--base <commit>]
+git threads comment [TARGET] [-m <text>] [--file <path> [--lines N | N-M]] [--side old|new] [--base <commit>]
 ```
 
-Starts a new thread. `COMMIT` defaults to `HEAD` — the commit whose *change* is being
-discussed. Without `-m`, your editor opens, resolved the way git resolves it
-(`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) — the same goes for `reply` and `edit`.
-The anchor's granularity follows the flags:
+Starts a new thread on `TARGET` — a commit-ish, a file path, or `path:lines`,
+disambiguated the way git tells revs from paths (a name that is both is an error;
+pass `--file` to mean the file). Without `-m`, your editor opens, resolved the way git
+resolves it (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) — the same goes for
+`reply` and `edit`.
 
-| flags | thread is about |
+| target | thread is about |
 |---|---|
-| none | the whole change |
-| `--file` | one file's change |
-| `--file --lines 120` or `--lines 120-128` | specific lines (1-based, inclusive) |
+| nothing, or a commit | the whole change (of `HEAD`, or of that commit) |
+| `src/parser.rs` | one file's change at `HEAD` |
+| `src/parser.rs:120` or `:120-128` | specific lines (1-based, inclusive) |
 
-`--file` also accepts the lines inline as `path:120` or `path:120-128` — the same shape
-`list` and `show` print, so locations can be pasted straight back in. Combining the
-suffix with `--lines` is an error.
+To anchor a file at some other commit, name the commit and pass `--file` — which takes
+the same `path:lines` shape, so locations printed by `list` and `show` can be pasted
+straight back in. Combining the suffix with `--lines` is an error.
 
 `--side old` anchors to the base version of the file (e.g. commenting on deleted lines);
 the default `new` is the version after the change. `--base` overrides the diff base — needed
@@ -75,7 +76,7 @@ on a root commit, useful to pick a parent of a merge commit or a branch's merge-
 Line numbers are validated against the actual file.
 
 ```console
-$ git threads comment --file src/parser.rs:120-128 -m "does this handle empty input?"
+$ git threads comment src/parser.rs:120-128 -m "does this handle empty input?"
 drafted thread 84727c6d0f7c21c40ee8768996a20f540d6b1304 (commit and push to share)
 ```
 

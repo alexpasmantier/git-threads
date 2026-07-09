@@ -56,7 +56,7 @@ fn comment(store: &Store, message: &str) -> git_threads_core::ThreadId {
     commands::comment(
         store,
         &CommentOpts {
-            commit: "HEAD".into(),
+            target: None,
             message: message.into(),
             file: None,
             lines: None,

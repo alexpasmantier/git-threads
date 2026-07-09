@@ -41,7 +41,7 @@ fn setup_repo() -> tempfile::TempDir {
 
 fn opts(message: &str) -> CommentOpts {
     CommentOpts {
-        commit: "HEAD".into(),
+        target: None,
         message: message.into(),
         file: None,
         lines: None,
@@ -123,6 +123,31 @@ fn file_line_suffix_is_equivalent_to_lines() {
     both.lines = Some("3".into());
     let err = commands::comment(&store, &both).unwrap_err();
     assert!(err.to_string().contains("conflicts"), "unexpected error: {err:#}");
+}
+
+#[test]
+fn positional_target_takes_commit_or_file() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+
+    // A file (with lines) as the positional anchors on HEAD's change.
+    let mut spec = opts("on lines");
+    spec.target = Some("src/lib.rs:2-3".into());
+    let thread = store.read_thread(&commands::comment(&store, &spec).unwrap()).unwrap().unwrap();
+    assert_eq!(thread.anchor.kind, AnchorKind::Range);
+    assert_eq!(thread.anchor.path.as_deref(), Some("src/lib.rs"));
+
+    // A commit-ish as the positional anchors the whole change.
+    let mut rev = opts("on a commit");
+    rev.target = Some("HEAD".into());
+    let thread = store.read_thread(&commands::comment(&store, &rev).unwrap()).unwrap().unwrap();
+    assert_eq!(thread.anchor.kind, AnchorKind::Commit);
+
+    // Neither a commit nor a file is an error.
+    let mut bad = opts("nope");
+    bad.target = Some("no/such/thing".into());
+    let err = commands::comment(&store, &bad).unwrap_err();
+    assert!(err.to_string().contains("neither"), "unexpected error: {err:#}");
 }
 
 #[test]
@@ -228,7 +253,7 @@ fn root_commit_requires_explicit_base() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
     let mut on_root = opts("first!");
-    on_root.commit = "HEAD~1".into(); // the root commit — no parent
+    on_root.target = Some("HEAD~1".into()); // the root commit — no parent
     let err = commands::comment(&store, &on_root).unwrap_err();
     assert!(err.to_string().contains("--base"), "unexpected error: {err:#}");
 }

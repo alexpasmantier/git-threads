@@ -29,9 +29,8 @@ enum Command {
         /// Comment text; opens your editor if omitted
         #[arg(short, long)]
         message: Option<String>,
-        /// Commit whose change is being discussed
-        #[arg(default_value = "HEAD")]
-        commit: String,
+        /// What to comment on: a commit, a file, or file:lines, e.g. src/lib.rs:120-128 [default: HEAD]
+        target: Option<String>,
         /// Anchor the thread to this file; may carry the lines directly, e.g. src/lib.rs:120-128
         #[arg(long)]
         file: Option<String>,
@@ -156,14 +155,18 @@ fn main() -> anyhow::Result<()> {
     let store = Store::discover()?;
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
-        Command::Comment { message, commit, file, lines, side, base } => {
+        Command::Comment { message, target, file, lines, side, base } => {
             let message = match message {
                 Some(text) => text,
-                None => editor::message(store.repo(), "", COMMENT_HINT)?,
+                None => {
+                    // Catch a bad target before the user types a message.
+                    commands::resolve_target(store.repo(), target.as_deref(), file.as_deref())?;
+                    editor::message(store.repo(), "", COMMENT_HINT)?
+                }
             };
             commands::comment(
                 &store,
-                &CommentOpts { commit, message, file, lines, side: side.into(), base },
+                &CommentOpts { target, message, file, lines, side: side.into(), base },
             )?;
             Ok(())
         }

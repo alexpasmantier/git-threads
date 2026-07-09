@@ -47,21 +47,23 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
 }
 
 pub struct CommentOpts {
-    /// Commit whose change is being discussed.
-    pub commit: String,
+    /// What is being discussed: a commit-ish, a file path, or `path:lines`.
+    /// `None` means HEAD's change.
+    pub target: Option<String>,
     pub message: String,
     pub file: Option<String>,
     /// `"120"` or `"120-128"`; requires `file`.
     pub lines: Option<String>,
     pub side: Side,
-    /// Diff base; defaults to the first parent of `commit`.
+    /// Diff base; defaults to the first parent of the commit.
     pub base: Option<String>,
 }
 
 /// Create a new thread anchored to a commit, file, or line range (SPEC.md §3).
 pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     let repo = store.repo();
-    let head = resolve_commit(repo, &opts.commit)?;
+    let (commit, file) = resolve_target(repo, opts.target.as_deref(), opts.file.as_deref())?;
+    let head = resolve_commit(repo, &commit)?;
     let base = match &opts.base {
         Some(spec) => resolve_commit(repo, spec)?,
         None => repo
@@ -70,11 +72,11 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
             .next()
             .map(|id| id.detach())
             .with_context(|| {
-                format!("{} has no parent; pass --base to choose a diff base", &opts.commit)
+                format!("{commit} has no parent; pass --base to choose a diff base")
             })?,
     };
 
-    let (kind, path, lines, blob) = match (&opts.file, &opts.lines) {
+    let (kind, path, lines, blob) = match (&file, &opts.lines) {
         (None, None) => (AnchorKind::Commit, None, None, None),
         (None, Some(_)) => bail!("--lines requires --file"),
         (Some(spec), lines) => {
@@ -123,7 +125,7 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
         },
         path,
         old_path: None,
-        side: opts.file.as_ref().map(|_| opts.side),
+        side: file.as_ref().map(|_| opts.side),
         lines,
         blob,
         cols: None,
@@ -140,6 +142,34 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     })?;
     println!("drafted thread {thread_id} (commit and push to share)");
     Ok(thread_id)
+}
+
+/// Sort out what `comment`'s positional refers to — a commit, or a file
+/// (path or path:lines) of HEAD's change — the way git disambiguates
+/// revs from paths. Returns the commit spec and the file spec, if any.
+pub fn resolve_target(
+    repo: &gix::Repository,
+    target: Option<&str>,
+    file: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    let Some(spec) = target else {
+        return Ok(("HEAD".into(), file.map(String::from)));
+    };
+    if file.is_some() {
+        // --file names the file, so the positional can only be the commit.
+        return Ok((spec.to_string(), file.map(String::from)));
+    }
+    let is_commit = resolve_commit(repo, spec).is_ok();
+    let (path, _) = split_line_suffix(spec);
+    let is_file = blob_at(repo, resolve_commit(repo, "HEAD")?, path)?.is_some();
+    match (is_commit, is_file) {
+        (true, true) => {
+            bail!("{spec:?} is both a commit and a file; pass --file {spec:?} to mean the file")
+        }
+        (true, false) => Ok((spec.to_string(), None)),
+        (false, true) => Ok(("HEAD".into(), Some(spec.to_string()))),
+        (false, false) => bail!("{spec:?} is neither a commit nor a file in HEAD"),
+    }
 }
 
 /// Reply to a thread, or to a specific message in one: the prefix may name

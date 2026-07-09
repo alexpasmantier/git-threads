@@ -60,7 +60,7 @@ fn setup() -> (tempfile::TempDir, Store, ThreadId) {
     let thread_id = commands::comment(
         &store,
         &CommentOpts {
-            commit: "HEAD".into(),
+            target: None,
             message: "beta needs a doc comment".into(),
             file: Some("code.rs".into()),
             lines: Some("7-9".into()),
@@ -186,7 +186,7 @@ fn commit_anchor_has_nothing_to_remap() {
     let whole = commands::comment(
         &store,
         &CommentOpts {
-            commit: "HEAD".into(),
+            target: None,
             message: "commit-level".into(),
             file: None,
             lines: None,
