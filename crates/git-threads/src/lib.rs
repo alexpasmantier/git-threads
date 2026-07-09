@@ -3,5 +3,6 @@
 //! Pure format logic lives in `git-threads-core`.
 
 pub mod commands;
+pub mod editor;
 pub mod reanchor;
 pub mod store;

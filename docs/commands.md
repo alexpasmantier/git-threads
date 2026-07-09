@@ -51,11 +51,13 @@ never ran `init` still works.
 ### `git threads comment`
 
 ```
-git threads comment [COMMIT] -m <text> [--file <path> [--lines N | N-M] [--side old|new]] [--base <commit>]
+git threads comment [COMMIT] [-m <text>] [--file <path> [--lines N | N-M] [--side old|new]] [--base <commit>]
 ```
 
 Starts a new thread. `COMMIT` defaults to `HEAD` — the commit whose *change* is being
-discussed. The anchor's granularity follows the flags:
+discussed. Without `-m`, your editor opens, resolved the way git resolves it
+(`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) — the same goes for `reply` and `edit`.
+The anchor's granularity follows the flags:
 
 | flags | thread is about |
 |---|---|
@@ -80,7 +82,7 @@ drafted thread 84727c6d0f7c21c40ee8768996a20f540d6b1304 (commit and push to shar
 ### `git threads reply`
 
 ```
-git threads reply <thread-or-message> -m <text>
+git threads reply <thread-or-message> [-m <text>]
 ```
 
 Replies to a thread. Passing a specific message's ID records that message as the reply's
@@ -90,10 +92,11 @@ target (`in_reply_to`); passing the thread ID targets the root. Display is flat 
 ### `git threads edit`
 
 ```
-git threads edit <message> -m <new text>
+git threads edit <message> [-m <new text>]
 ```
 
-Replaces the text of one of **your** comments or replies. Append-only: this adds an `edit`
+Replaces the text of one of **your** comments or replies; without `-m`, your editor opens
+pre-filled with the current text. Append-only: this adds an `edit`
 event; the original stays in history and the message shows an `(edited)` marker. Editing
 someone else's message is rejected (the fold would ignore it anyway), as is editing a
 retracted message. Repeated edits chain — each supersedes the previous version.

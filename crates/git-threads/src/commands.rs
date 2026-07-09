@@ -164,6 +164,30 @@ pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
 /// tip of the target's edit chain (SPEC.md §2.1). Only the author's edits
 /// take effect in the fold, so anyone else's are rejected here.
 pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId> {
+    let (thread, target) = find_editable(store, event_prefix)?;
+    let event = new_event(store.repo(), EventKind::Edit, |e| {
+        e.body = Some(message.to_string());
+        e.supersedes = Some(target.chain_tip.clone());
+    })?;
+    let event_id = event.id()?;
+    store.draft(&Batch {
+        new_threads: vec![],
+        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
+    })?;
+    println!("drafted edit of {} (edit event {})", short(&target.id), short(&event_id));
+    Ok(event_id)
+}
+
+/// The current text of a comment or reply, for seeding the editor when
+/// `edit` runs without --message. Validates like `edit` does, so the editor
+/// never opens for a message that can't be edited.
+pub fn current_body(store: &Store, event_prefix: &str) -> Result<String> {
+    let (_, target) = find_editable(store, event_prefix)?;
+    Ok(target.effective_body.unwrap_or_default())
+}
+
+/// Find a message and check it's editable: written by us and not retracted.
+fn find_editable(store: &Store, event_prefix: &str) -> Result<(ThreadRecord, FoldedEvent)> {
     let (thread, target) = find_message(store, event_prefix)?;
     let me = identity(store.repo())?;
     if target.event.author.email != me.email {
@@ -177,17 +201,7 @@ pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId>
     if target.retracted {
         bail!("{} is retracted; nothing to edit", short(&target.id));
     }
-    let event = new_event(store.repo(), EventKind::Edit, |e| {
-        e.body = Some(message.to_string());
-        e.supersedes = Some(target.chain_tip.clone());
-    })?;
-    let event_id = event.id()?;
-    store.draft(&Batch {
-        new_threads: vec![],
-        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
-    })?;
-    println!("drafted edit of {} (edit event {})", short(&target.id), short(&event_id));
-    Ok(event_id)
+    Ok((thread, target))
 }
 
 /// Retract a comment or reply with a `delete` tombstone (SPEC.md §2.1). The

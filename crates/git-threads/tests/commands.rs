@@ -126,6 +126,40 @@ fn file_line_suffix_is_equivalent_to_lines() {
 }
 
 #[test]
+#[cfg(unix)]
+fn missing_message_opens_git_editor() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = setup_repo();
+    let path = dir.path();
+    let editor = path.join("fake-editor.sh");
+    fs::write(&editor, "#!/bin/sh\necho 'from the editor' > \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let run = |editor: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .env("GIT_EDITOR", editor)
+            .arg("comment")
+            .output()
+            .unwrap()
+    };
+    let output = run(&editor);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let store = Store::open(path).unwrap();
+    let thread = store.threads().unwrap().pop().unwrap();
+    assert_eq!(thread.events[0].1.body.as_deref(), Some("from the editor"));
+
+    // An editor that leaves only the commented hint aborts the comment.
+    let noop = path.join("noop-editor.sh");
+    fs::write(&noop, "#!/bin/sh\ntrue\n").unwrap();
+    fs::set_permissions(&noop, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = run(&noop);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("empty message"));
+    assert_eq!(store.threads().unwrap().len(), 1);
+}
+
+#[test]
 fn old_side_comment_reads_base_blob() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

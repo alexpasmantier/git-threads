@@ -1,7 +1,13 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use git_threads::commands::{self, CommentOpts};
+use git_threads::editor;
 use git_threads::store::Store;
 use git_threads_core::Side;
+
+const COMMENT_HINT: &str = "Enter your message. Lines starting with '#' will be ignored,\n\
+    and an empty message aborts the operation.";
+const EDIT_HINT: &str = "Edit the text above. Lines starting with '#' will be ignored,\n\
+    and an empty message aborts the operation.";
 
 #[derive(Parser)]
 #[command(name = "git-threads", version, about = "Anchored, threaded discussions stored in git")]
@@ -20,9 +26,9 @@ enum Command {
     },
     /// Start a new thread on a commit, file, or line range
     Comment {
-        /// Comment text
+        /// Comment text; opens your editor if omitted
         #[arg(short, long)]
-        message: String,
+        message: Option<String>,
         /// Commit whose change is being discussed
         #[arg(default_value = "HEAD")]
         commit: String,
@@ -43,17 +49,17 @@ enum Command {
     Reply {
         /// Thread ID, or the ID of the comment/reply being answered (or a unique prefix)
         thread: String,
-        /// Reply text
+        /// Reply text; opens your editor if omitted
         #[arg(short, long)]
-        message: String,
+        message: Option<String>,
     },
     /// Edit a comment or reply (appends an edit event; history is preserved)
     Edit {
         /// Event ID (or unique prefix) of the comment or reply, as shown by `show`
         event: String,
-        /// Replacement text
+        /// Replacement text; opens your editor on the current text if omitted
         #[arg(short, long)]
-        message: String,
+        message: Option<String>,
     },
     /// Retract a comment or reply (appends a tombstone; content stays in history)
     Delete {
@@ -151,6 +157,10 @@ fn main() -> anyhow::Result<()> {
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
         Command::Comment { message, commit, file, lines, side, base } => {
+            let message = match message {
+                Some(text) => text,
+                None => editor::message(store.repo(), "", COMMENT_HINT)?,
+            };
             commands::comment(
                 &store,
                 &CommentOpts { commit, message, file, lines, side: side.into(), base },
@@ -158,10 +168,21 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Reply { thread, message } => {
+            let message = match message {
+                Some(text) => text,
+                None => editor::message(store.repo(), "", COMMENT_HINT)?,
+            };
             commands::reply(&store, &thread, &message)?;
             Ok(())
         }
         Command::Edit { event, message } => {
+            let message = match message {
+                Some(text) => text,
+                None => {
+                    let seed = commands::current_body(&store, &event)?;
+                    editor::message(store.repo(), &seed, EDIT_HINT)?
+                }
+            };
             commands::edit(&store, &event, &message)?;
             Ok(())
         }
