@@ -17,9 +17,13 @@ pub fn message(repo: &gix::Repository, seed: &str, hint: &str) -> Result<String>
     }
     contents.push('\n');
     for line in hint.lines() {
-        contents.push_str("# ");
-        contents.push_str(line);
-        contents.push('\n');
+        if line.is_empty() {
+            contents.push_str("#\n");
+        } else {
+            contents.push_str("# ");
+            contents.push_str(line);
+            contents.push('\n');
+        }
     }
     std::fs::write(&path, &contents)?;
 

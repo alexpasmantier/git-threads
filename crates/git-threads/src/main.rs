@@ -173,7 +173,10 @@ fn main() -> anyhow::Result<()> {
         Command::Reply { thread, message } => {
             let message = match message {
                 Some(text) => text,
-                None => editor::message(store.repo(), "", COMMENT_HINT)?,
+                None => {
+                    let preview = commands::thread_preview(&store, &thread)?;
+                    editor::message(store.repo(), "", &format!("{COMMENT_HINT}\n\n{preview}"))?
+                }
             };
             commands::reply(&store, &thread, &message)?;
             Ok(())

@@ -2,8 +2,8 @@ use crate::reanchor::{self, Reanchor};
 use crate::store::{Append, Batch, Integration, NewThread, Store, ThreadRecord};
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
-    Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, FoldedEvent, GitOid,
-    LineRange, ReanchorStatus, Side, SnippetTarget, ThreadId, Timestamp, derive_snippet,
+    Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, FoldedEvent, FoldedThread,
+    GitOid, LineRange, ReanchorStatus, Side, SnippetTarget, ThreadId, Timestamp, derive_snippet,
     fold_thread,
 };
 use gix::ObjectId;
@@ -387,27 +387,55 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
         }
     }
 
+    print!("{}", render_conversation(&thread, &folded));
+    Ok(())
+}
+
+/// The conversation as `show` prints it: one block per message, blank-line
+/// separated, starting with a blank line.
+fn render_conversation(thread: &ThreadRecord, folded: &FoldedThread) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
     for event in &folded.events {
-        println!();
         let marker = if event.event.kind == EventKind::Reply { "↳ " } else { "● " };
         let edited = if event.edited { " (edited)" } else { "" };
         let draft = if thread.drafts.contains(&event.id) { " (draft)" } else { "" };
-        println!(
-            "{marker}{}  {} <{}> {}{edited}{draft}",
+        writeln!(
+            out,
+            "\n{marker}{}  {} <{}> {}{edited}{draft}",
             short(&event.id),
             event.event.author.name,
             event.event.author.email,
             event.event.ts
-        );
+        )
+        .unwrap();
         if event.retracted {
-            println!("  [retracted]");
+            out.push_str("  [retracted]\n");
         } else if let Some(body) = &event.effective_body {
             for line in body.lines() {
-                println!("  {line}");
+                writeln!(out, "  {line}").unwrap();
             }
         }
     }
-    Ok(())
+    out
+}
+
+/// A compact rendering of a thread — id, status, location, conversation —
+/// for the editor hint when `reply` runs without --message.
+pub fn thread_preview(store: &Store, prefix: &str) -> Result<String> {
+    let (thread, _) = find_message(store, prefix)?;
+    let folded = fold_thread(thread.events.clone());
+    let status = if folded.resolved { "resolved" } else { "open" };
+    let location = match (&thread.anchor.path, &thread.anchor.lines) {
+        (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
+        (Some(path), None) => path.clone(),
+        _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
+    };
+    Ok(format!(
+        "replying to thread {}  [{status}]  on {location}{}",
+        short(&thread.id),
+        render_conversation(&thread, &folded)
+    ))
 }
 
 /// Discard one drafted event before publishing. Discarding a drafted
