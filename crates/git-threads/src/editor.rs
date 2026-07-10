@@ -6,7 +6,8 @@ use std::process::Command;
 /// Open the user's editor on a seeded `.git/THREADS_EDITMSG` file and return
 /// what they wrote. The editor is resolved exactly like git's (`GIT_EDITOR`,
 /// `core.editor`, `VISUAL`, `EDITOR`, then the default) via `git var`.
-/// Lines starting with `#` are stripped; an empty result aborts.
+/// Lines starting with `#` are stripped; an empty result exits quietly
+/// without drafting anything, the way `git commit` aborts.
 pub fn message(repo: &gix::Repository, seed: &str, hint: &str) -> Result<String> {
     let editor = git_editor()?;
     let path = repo.git_dir().join("THREADS_EDITMSG");
@@ -44,7 +45,8 @@ pub fn message(repo: &gix::Repository, seed: &str, hint: &str) -> Result<String>
         text.lines().filter(|line| !line.starts_with('#')).collect::<Vec<_>>().join("\n");
     let message = message.trim();
     if message.is_empty() {
-        bail!("aborting due to empty message");
+        eprintln!("Aborting due to empty message.");
+        std::process::exit(1);
     }
     Ok(message.to_string())
 }

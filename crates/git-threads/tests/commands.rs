@@ -180,7 +180,10 @@ fn missing_message_opens_git_editor() {
     fs::set_permissions(&noop, fs::Permissions::from_mode(0o755)).unwrap();
     let output = run(&noop);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("empty message"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // A quiet notice like git's, not an Error dump.
+    assert!(stderr.contains("empty message"), "unexpected stderr: {stderr}");
+    assert!(!stderr.contains("Error"), "unexpected stderr: {stderr}");
     assert_eq!(store.threads().unwrap().len(), 1);
 }
 
