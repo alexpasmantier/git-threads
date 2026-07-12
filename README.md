@@ -1,6 +1,6 @@
 # git-threads
 
-Conversations about diffs. In plain git.
+Code comments document code. Commit messages document diffs — but only as a whole. `git-threads` brings the granularity back: comment on a commit, a file in its diff, or a hunk.
 
 ```text
 $ git threads show bebce03de90b
@@ -29,17 +29,21 @@ now crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
 _The thread was pinned to line 94 at comment time; the code has since moved to line 146, and
 `show` found it again by snippet matching (`fuzzy(3)`)._
 
-Threads are pinned to commits, files, or line ranges. All data lives on a dedicated ref
-(`refs/threads/data`) that any git host stores without needing to know about it, syncs with
-plain push/fetch, and can never produce a merge conflict. When code moves, threads follow it:
-their position is recomputed against whatever commit you're looking at.
+All data lives on a dedicated ref (`refs/threads/data`) that any git host stores without needing to know about it, syncs
+with plain push/fetch, and can never produce a merge conflict. When code moves, threads follow it: their position is
+recomputed against whatever commit you're looking at.
 
-- **[How it works](docs/how-it-works.md)** — plain-language tour with diagrams, no git
-  internals required
-- **[Command reference](docs/commands.md)** — every command: options, examples, behavior
-- **[Deep dives](docs/README.md)** — one document per subsystem: format, state fold, storage,
-  sync, re-anchoring
-- **[SPEC.md](SPEC.md)** — the format specification (draft v0.1)
+## How can I use this?
+
+- PR discussions can be very valuable. let's keep these in the repository itself, where they survive a host migration and travel
+  with every clone
+- Commenting on a targetted change for future reviewers — or your future self
+- Reviewing code without a forge: offline, over email, or on a bare git server
+- Giving coding agents a place to leave and pick up review comments — they already speak git,
+  no forge API needed
+- Recording audit notes or code-archaeology findings pinned to the commits they concern
+- Making a git repository a self-contained knowledge base, with discussions that follow the code
+  as it moves and changes
 
 ## Status
 
@@ -74,12 +78,6 @@ Reading the raw data needs nothing but git:
 $ git ls-tree -r --name-only refs/threads/data
 $ git show refs/threads/data:threads/<xx>/<thread-id>/anchor.json
 ```
-
-## Workspace
-
-- `crates/git-threads-core` — the format: schemas, canonical JSON, content-addressed IDs,
-  state fold, snippet matching. Pure logic, no I/O, no git dependency.
-- `crates/git-threads` — the CLI: storage on the threads ref, sync, re-anchoring, commands.
 
 ## License
 
