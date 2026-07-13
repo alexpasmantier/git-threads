@@ -58,9 +58,12 @@ already there. `git threads pull` remains for fetching on demand.
 git threads deinit [--force]
 ```
 
-The exact inverse of `init`, for this clone only: removes the fetch refspec from every
-remote and deletes everything under `refs/threads/` — data, drafts, tracking refs. The
-remote's threads data is untouched, so `init` starts over from it and the discussions come
+Completely uninstalls git-threads from your clone — afterwards the repository is as if no
+`git threads` command had ever run.
+
+It is the exact inverse of `init`: removes the fetch refspec from every remote and deletes
+everything under `refs/threads/` — data, drafts, tracking refs. Only this clone is touched;
+the remote's threads data survives, so `init` starts over from it and the discussions come
 back. Unshared work is protected: drafts or local events that reached no remote make
 `deinit` refuse, with the way out named (`commit`/`push`, `discard --all`, or `--force` to
 drop them knowingly).
