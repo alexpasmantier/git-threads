@@ -1,5 +1,6 @@
 use crate::reanchor::{self, Reanchor};
 use crate::store::{Append, Batch, Integration, NewThread, Store, ThreadRecord};
+use crate::ui::{self, Ui};
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
     Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, FoldedEvent, FoldedThread,
@@ -220,7 +221,12 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
         new_threads: vec![NewThread { anchor, root, events: vec![] }],
         appends: vec![],
     })?;
-    println!("drafted thread {thread_id} (commit and push to share)");
+    let ui = Ui::auto();
+    println!(
+        "drafted thread {} {}",
+        ui.yellow(short(&thread_id)),
+        ui.dim("(commit and push to share)")
+    );
     Ok(thread_id)
 }
 
@@ -400,7 +406,12 @@ pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("drafted reply {} to thread {}", short(&event_id), short(&thread.id));
+    let ui = Ui::auto();
+    println!(
+        "drafted reply {} to thread {}",
+        ui.yellow(short(&event_id)),
+        ui.yellow(short(&thread.id))
+    );
     Ok(event_id)
 }
 
@@ -418,7 +429,12 @@ pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId>
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("drafted edit of {} (edit event {})", short(&target.id), short(&event_id));
+    let ui = Ui::auto();
+    println!(
+        "drafted edit of {} {}",
+        ui.yellow(short(&target.id)),
+        ui.dim(format_args!("(edit event {})", short(&event_id)))
+    );
     Ok(event_id)
 }
 
@@ -472,7 +488,7 @@ pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("drafted retraction of {}", short(&target.id));
+    println!("drafted retraction of {}", Ui::auto().yellow(short(&target.id)));
     Ok(event_id)
 }
 
@@ -487,10 +503,12 @@ pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
+    let ui = Ui::auto();
     println!(
-        "thread {} {} (draft)",
-        short(&thread.id),
-        if resolved { "resolved" } else { "reopened" }
+        "thread {} {} {}",
+        ui.yellow(short(&thread.id)),
+        if resolved { "resolved" } else { "reopened" },
+        ui.dim("(draft)")
     );
     Ok(())
 }
@@ -525,14 +543,23 @@ pub fn list(
     let at_commit = resolve_commit(repo, at)?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
-    let mut shown = 0;
+    let ui = Ui::auto();
+    struct Row {
+        glyph: String,
+        id: String,
+        location: String,
+        /// Display width of `location`, which may carry invisible color codes.
+        width: usize,
+        title: String,
+        meta: String,
+    }
+    let mut rows: Vec<Row> = Vec::new();
     for thread in threads {
         let folded = fold_thread(thread.events.clone());
         if resolved.is_some_and(|want| folded.resolved != want) {
             continue;
         }
-        shown += 1;
-        let status = if folded.resolved { "resolved" } else { "open" };
+        let glyph = if folded.resolved { ui.magenta("✓") } else { ui.green("●") };
         let location = match (&thread.anchor.path, &thread.anchor.lines) {
             (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
             (Some(path), None) => path.clone(),
@@ -544,9 +571,15 @@ pub fn list(
             }
             Reanchor::Located { path, lines, status } => {
                 let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-                format!("  → {path}{lines} ({status})")
+                format!(" → {path}{lines} ({status})")
             }
-            Reanchor::Outdated => "  (outdated)".to_string(),
+            Reanchor::Outdated => " (outdated)".to_string(),
+        };
+        let width = location.chars().count() + placement.chars().count();
+        let placement = match &placement {
+            p if p.is_empty() => placement,
+            p if p.ends_with("(outdated)") => ui.red(p),
+            p => ui.yellow(p),
         };
         let title = folded
             .events
@@ -555,20 +588,40 @@ pub fn list(
             .unwrap_or("")
             .lines()
             .next()
-            .unwrap_or("");
-        let drafts = match thread.drafts.len() {
-            0 => String::new(),
-            n => format!(", {n} draft{}", if n == 1 { "" } else { "s" }),
-        };
-        println!(
-            "{}  [{status}] {location}{placement}  ({} message{}{drafts})  {title}",
-            short(&thread.id),
-            folded.events.len(),
-            if folded.events.len() == 1 { "" } else { "s" },
-        );
+            .unwrap_or("")
+            .to_string();
+        let mut meta = Vec::new();
+        if folded.events.len() > 1 {
+            meta.push(ui.dim(format_args!("{} messages", folded.events.len())));
+        }
+        if !thread.drafts.is_empty() {
+            let n = thread.drafts.len();
+            meta.push(ui.yellow(format_args!("{n} draft{}", if n == 1 { "" } else { "s" })));
+        }
+        rows.push(Row {
+            glyph,
+            id: ui.yellow(short(&thread.id)),
+            location: format!("{location}{placement}"),
+            width,
+            title,
+            meta: meta.join(&ui.dim(" · ")),
+        });
     }
-    if shown == 0 {
-        println!("no threads");
+    if rows.is_empty() {
+        println!("{}", ui.dim("no threads"));
+        return Ok(());
+    }
+    let column = rows.iter().map(|r| r.width).max().unwrap_or(0);
+    for row in rows {
+        let pad = " ".repeat(column - row.width);
+        let mut line = format!("{} {}  {}{pad}", row.glyph, row.id, row.location);
+        for part in [row.title, row.meta] {
+            if !part.is_empty() {
+                line.push_str("  ");
+                line.push_str(&part);
+            }
+        }
+        println!("{}", line.trim_end());
     }
     Ok(())
 }
@@ -642,22 +695,27 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
     let folded = fold_thread(thread.events.clone());
     let anchor = &thread.anchor;
+    let ui = Ui::auto();
 
-    let status = if folded.resolved { "resolved" } else { "open" };
-    println!("thread {}  [{status}]", thread.id);
+    let status = if folded.resolved { ui.magenta("(resolved)") } else { ui.green("(open)") };
+    println!("{} {status}", ui.yellow(format_args!("thread {}", thread.id)));
     let side = match anchor.side {
-        Some(Side::Old) => " (old side)",
-        _ => "",
+        Some(Side::Old) => ui.dim(" (old side)"),
+        _ => String::new(),
     };
     let location = match (&anchor.path, &anchor.lines) {
-        (Some(path), Some(lines)) => format!("{path}:{}-{}{side}", lines.start, lines.end),
-        (Some(path), None) => format!("{path}{side}"),
+        (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
+        (Some(path), None) => path.clone(),
         _ => "whole change".to_string(),
     };
     println!(
-        "on {location} of {}..{}",
-        &anchor.diff.base.as_str()[..12],
-        &anchor.diff.head.as_str()[..12]
+        "on {}{side} {}",
+        ui.bold(location),
+        ui.dim(format_args!(
+            "of {}..{}",
+            &anchor.diff.base.as_str()[..12],
+            &anchor.diff.head.as_str()[..12]
+        ))
     );
 
     let target = resolve_commit(store.repo(), at)?;
@@ -666,52 +724,67 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
     match &placement {
         Reanchor::WholeCommit => {}
         Reanchor::Located { path, lines, status } => {
-            let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-            println!("now {path}{lines} at {target_short} ({status})");
+            // Only news when the thread drifted: an exact hit at the anchor's
+            // own location goes without saying.
+            let exact = matches!(status, ReanchorStatus::Exact);
+            if !exact || Some(path) != anchor.path.as_ref() || *lines != anchor.lines {
+                let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+                let status = format!("({status})");
+                let status = if exact { ui.green(status) } else { ui.yellow(status) };
+                println!(
+                    "now {} at {target_short} {status}",
+                    ui.bold(format_args!("{path}{lines}"))
+                );
+            }
         }
         Reanchor::Outdated => {
-            println!("outdated at {target_short}: showing the anchor's own context");
+            println!("{} at {target_short}: showing the anchor's own context", ui.red("outdated"));
         }
     }
 
     match &placement {
         Reanchor::Located { path, lines: Some(lines), .. } => {
             if let Some(blob) = reanchor::blob_at(store.repo(), target, path)? {
-                print_snippet(&reanchor::blob_content(store.repo(), blob)?, *lines);
+                print_snippet(ui, &reanchor::blob_content(store.repo(), blob)?, *lines);
             }
         }
         _ => {
             if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
                 let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
-                print_snippet(&reanchor::blob_content(store.repo(), blob_id)?, lines);
+                print_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines);
             }
         }
     }
 
-    print!("{}", render_conversation(&thread, &folded));
+    print!("{}", render_conversation(ui, &thread, &folded));
     Ok(())
 }
 
 /// The conversation as `show` prints it: one block per message, blank-line
 /// separated, starting with a blank line.
-fn render_conversation(thread: &ThreadRecord, folded: &FoldedThread) -> String {
+fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     for event in &folded.events {
-        let marker = if event.event.kind == EventKind::Reply { "↳ " } else { "● " };
-        let edited = if event.edited { " (edited)" } else { "" };
-        let draft = if thread.drafts.contains(&event.id) { " (draft)" } else { "" };
+        let marker = if event.event.kind == EventKind::Reply { "↳" } else { "●" };
+        let edited = if event.edited { format!(" {}", ui.dim("(edited)")) } else { String::new() };
+        let draft = if thread.drafts.contains(&event.id) {
+            format!(" {}", ui.yellow("(draft)"))
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "\n{marker}{}  {} <{}> {}{edited}{draft}",
-            short(&event.id),
-            event.event.author.name,
-            event.event.author.email,
-            event.event.ts
+            "\n{} {}  {} {}  {}{edited}{draft}",
+            ui.cyan(marker),
+            ui.yellow(short(&event.id)),
+            ui.bold(&event.event.author.name),
+            ui.dim(format_args!("<{}>", event.event.author.email)),
+            ui.dim(ui::when(&event.event.ts)),
         )
         .unwrap();
         if event.retracted {
-            out.push_str("  [retracted]\n");
+            writeln!(out, "  {}", ui.dim("[retracted]")).unwrap();
         } else if let Some(body) = &event.effective_body {
             for line in body.lines() {
                 writeln!(out, "  {line}").unwrap();
@@ -735,7 +808,7 @@ pub fn thread_preview(store: &Store, prefix: &str) -> Result<String> {
     Ok(format!(
         "replying to thread {}  [{status}]  on {location}{}",
         short(&thread.id),
-        render_conversation(&thread, &folded)
+        render_conversation(Ui::plain(), &thread, &folded)
     ))
 }
 
@@ -759,14 +832,15 @@ pub fn discard(store: &Store, prefix: &str) -> Result<()> {
         ),
     };
     let removed = store.discard_draft(&thread_id, &event_id)?;
+    let ui = Ui::auto();
     if removed > 1 || event_id == thread_id {
         println!(
-            "discarded draft thread {} ({removed} event{})",
-            short(&thread_id),
-            if removed == 1 { "" } else { "s" },
+            "discarded draft thread {} {}",
+            ui.yellow(short(&thread_id)),
+            ui.dim(format_args!("({removed} event{})", if removed == 1 { "" } else { "s" })),
         );
     } else {
-        println!("discarded draft {}", short(&event_id));
+        println!("discarded draft {}", ui.yellow(short(&event_id)));
     }
     Ok(())
 }
@@ -782,15 +856,21 @@ pub fn discard_all(store: &Store) -> Result<()> {
 }
 
 /// Print a marked, line-numbered snippet of `lines` out of `content`.
-fn print_snippet(content: &str, lines: LineRange) {
+/// Context lines are dimmed so the target lines carry the eye.
+fn print_snippet(ui: Ui, content: &str, lines: LineRange) {
     let Some(snippet) = derive_snippet(content, lines) else {
         return;
     };
     println!();
-    fn print_line(line_no: &mut u32, line: &str, marked: bool) {
-        println!("{} {line_no:>5} │ {line}", if marked { ">" } else { " " });
+    let print_line = |line_no: &mut u32, line: &str, marked: bool| {
+        let gutter = ui.dim(format_args!("{line_no:>5} │"));
+        if marked {
+            println!("{} {gutter} {line}", ui.cyan(">"));
+        } else {
+            println!("  {gutter} {}", ui.dim(line));
+        }
         *line_no += 1;
-    }
+    };
     let mut line_no = snippet.first_line;
     for line in &snippet.before {
         print_line(&mut line_no, line, false);
@@ -805,7 +885,7 @@ fn print_snippet(content: &str, lines: LineRange) {
             for line in head {
                 print_line(&mut line_no, line, true);
             }
-            println!("        ⋮ {omitted} lines omitted");
+            println!("        {}", ui.dim(format_args!("⋮ {omitted} lines omitted")));
             line_no += *omitted as u32;
             for line in tail {
                 print_line(&mut line_no, line, true);
@@ -832,11 +912,12 @@ pub fn pull(store: &Store, remote: &str) -> Result<()> {
 pub fn commit(store: &Store) -> Result<()> {
     match store.commit_drafts()? {
         Some(promoted) => println!(
-            "committed {} event{} in {} thread{} (git threads push to share)",
+            "committed {} event{} in {} thread{} {}",
             promoted.events,
             if promoted.events == 1 { "" } else { "s" },
             promoted.threads,
             if promoted.threads == 1 { "" } else { "s" },
+            Ui::auto().dim("(git threads push to share)"),
         ),
         None => println!("nothing to commit (no drafts)"),
     }

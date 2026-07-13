@@ -106,10 +106,10 @@ change to it".
 
 ```console
 $ git threads comment src/parser.rs:120-128 -m "does this handle empty input?"
-drafted thread 84727c6d0f7c21c40ee8768996a20f540d6b1304 (commit and push to share)
+drafted thread 84727c6d0f7c (commit and push to share)
 
 $ git threads comment main...topic src/parser.rs:120-128 -m "same, but on a branch's diff"
-drafted thread 662487d5825d7c21c40ee8768996a20f540d6b13 (commit and push to share)
+drafted thread 662487d5825d (commit and push to share)
 ```
 
 ### `git threads reply`
@@ -193,10 +193,11 @@ $ git threads list src/parser.rs            # every discussion this file ever ha
 $ git threads list src/ --resolved          # settled questions under src/
 ```
 
-Each thread prints newest first: ID, open/resolved state, anchor location, re-anchored
-placement against `--at` (default `HEAD`; `→ path:lines (relocated|fuzzy(f))`, `(outdated)`,
-or nothing when the anchor still matches exactly), message and draft counts, and the first
-line of the root comment.
+Each thread prints newest first, one aligned line: state glyph (`●` open, `✓` resolved), ID,
+anchor location, re-anchored placement against `--at` (default `HEAD`;
+`→ path:lines (relocated|fuzzy(f))`, `(outdated)`, or nothing when the anchor still matches
+exactly), the first line of the root comment, and — when there's more than one message or a
+draft — the counts.
 
 ### `git threads show`
 
@@ -207,7 +208,7 @@ git threads show <thread-or-message> [--at <commit>]
 One thread in full: the anchor and its diff, where the thread lands on `--at` per the
 re-anchoring ladder, the code snippet (from the re-anchored location, or from the original
 diff when outdated), and the folded conversation — each message with its ID, author,
-timestamp, and `(edited)` / `(draft)` / `[retracted]` markers.
+date (relative while recent), and `(edited)` / `(draft)` / `[retracted]` markers.
 
 ## Sharing
 
