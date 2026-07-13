@@ -43,8 +43,13 @@ git threads init [--remote <name>]      # default: origin
 
 One-time setup for a clone: adds the fetch refspec that makes plain `git fetch` also bring
 in threads data (into a tracking ref — never onto your local data), then runs an initial
-fetch. Safe to re-run; `pull` and `push` also self-heal this configuration, so a clone that
-never ran `init` still works.
+fetch and integrates what it finds. Safe to re-run; `pull` and `push` also self-heal this
+configuration, so a clone that never ran `init` still works.
+
+From then on, no extra command is needed to receive: every `git threads` command starts by
+folding freshly fetched tracking-ref data into your local data (always conflict-free, never
+touching your drafts), so whatever your normal `git fetch` / `git pull` brought in is
+already there. `git threads pull` remains for fetching on demand.
 
 ## Writing
 
@@ -218,8 +223,11 @@ get a reminder if any exist.
 git threads pull [--remote <name>]      # default: origin
 ```
 
-The receive side: fetch into the tracking ref and integrate into your local data. Never
-touches your drafts, and never loses local events — divergence unions, it doesn't overwrite.
+The receive side, on demand: fetch into the tracking ref and integrate into your local data.
+Never touches your drafts, and never loses local events — divergence unions, it doesn't
+overwrite. Rarely needed after `init`: a plain `git fetch` delivers the data and any
+`git threads` command integrates it automatically — `pull` is for when you want the fetch
+*now*.
 
 ## Reading the data without the CLI
 

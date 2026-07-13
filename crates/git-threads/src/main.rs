@@ -158,6 +158,10 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let store = Store::discover()?;
+    // Fold in anything a plain `git fetch` brought since the last command.
+    if let Err(err) = commands::integrate_fetched(&store) {
+        eprintln!("warning: could not integrate fetched threads data: {err:#}");
+    }
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
         Command::Comment { message, target, file, side } => {

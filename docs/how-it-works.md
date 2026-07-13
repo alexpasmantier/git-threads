@@ -170,8 +170,10 @@ edit → `commit` → `push`.
 Discussions move between people the same way code does: push and fetch. But git-threads never
 lets a fetch stomp on your local data. Fetched remote state lands in a separate **tracking
 pointer** (`refs/threads/remotes/origin/data` — same idea as `origin/main` for branches), and
-is then explicitly _integrated_ into your local data. `git threads push` runs a three-step
-loop:
+is then _integrated_ into your local data. Integration can never conflict (see below), so it
+happens by itself: after the one-time `init`, your normal `git fetch` or `git pull` delivers
+new discussions, and the next `git threads` command folds them in. `git threads push` runs a
+three-step loop:
 
 ```mermaid
 sequenceDiagram

@@ -25,7 +25,10 @@ see below):
   found while dogfooding; the discussion thread that reported it, anchored to the offending
   line, lives in the repo's own threads data (thread `84727c6d`). The fix mirrors git's own
   branch model: fetch updates `refs/threads/remotes/origin/data` (analogous to `origin/main`),
-  and moving *your* ref is a separate, explicit integration step.
+  and moving *your* ref is a separate integration step under the tool's control. Unlike a
+  branch merge it can never conflict and never loses events, so the CLI runs it
+  opportunistically before every command — after `init`, a plain `git fetch` is all it takes
+  for new threads to appear; `git threads pull` just adds the fetch itself.
 - **The tracking ref lives under `refs/threads/remotes/…`, not `refs/remotes/…`** — a branch
   literally named `threads/data` would collide with the standard namespace.
 - **No push refspec is configured.** Setting `remote.<name>.push` *replaces* git's default

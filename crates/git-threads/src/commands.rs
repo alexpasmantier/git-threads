@@ -40,8 +40,48 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
         println!("configured {key} += {refspec}");
     }
     match git(&workdir, &["fetch", remote]) {
-        Ok(_) => println!("fetched from {remote}"),
+        Ok(_) => {
+            println!("fetched from {remote}");
+            if let Some(tip) = store.tracking_tip(remote)? {
+                report_integration(store.integrate(tip)?, remote);
+            }
+        }
         Err(err) => eprintln!("warning: initial fetch from {remote} failed: {err:#}"),
+    }
+    Ok(())
+}
+
+fn report_integration(integration: Integration, remote: &str) {
+    match integration {
+        Integration::UpToDate => println!("already up to date"),
+        Integration::Initialized => println!("initialized from {remote}"),
+        Integration::FastForwarded => println!("fast-forwarded to {remote}"),
+        Integration::Merged => println!("merged threads from {remote}"),
+    }
+}
+
+/// Fold already-fetched threads data into the local ref: integrate every
+/// `refs/threads/remotes/*/data` tracking ref (SPEC.md §7.2 step 2, run
+/// opportunistically before every command). Purely local — after `init`,
+/// plain `git fetch` delivers the data and the next command picks it up
+/// here. Safe by construction: integration never conflicts and never
+/// discards local events.
+pub fn integrate_fetched(store: &Store) -> Result<()> {
+    const PREFIX: &str = "refs/threads/remotes/";
+    let repo = store.repo();
+    for reference in repo.references()?.prefixed(PREFIX)?.flatten() {
+        let name = reference.name().as_bstr().to_string();
+        let Some(remote) = name.strip_prefix(PREFIX).and_then(|r| r.strip_suffix("/data")) else {
+            continue;
+        };
+        let Some(tip) = reference.try_id().map(|id| id.detach()) else { continue };
+        match store.integrate(tip)? {
+            Integration::UpToDate => {}
+            // On stderr: a side note to whatever command is running.
+            Integration::Initialized => eprintln!("threads: initialized from {remote}"),
+            Integration::FastForwarded => eprintln!("threads: fast-forwarded to {remote}"),
+            Integration::Merged => eprintln!("threads: merged data from {remote}"),
+        }
     }
     Ok(())
 }
@@ -728,10 +768,7 @@ fn print_snippet(content: &str, lines: LineRange) {
 pub fn pull(store: &Store, remote: &str) -> Result<()> {
     match fetch_and_integrate(store, remote)? {
         None => println!("no threads data on {remote}"),
-        Some(Integration::UpToDate) => println!("already up to date"),
-        Some(Integration::Initialized) => println!("initialized from {remote}"),
-        Some(Integration::FastForwarded) => println!("fast-forwarded to {remote}"),
-        Some(Integration::Merged) => println!("merged threads from {remote}"),
+        Some(integration) => report_integration(integration, remote),
     }
     Ok(())
 }

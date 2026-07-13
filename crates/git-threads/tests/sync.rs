@@ -87,6 +87,30 @@ fn publish_then_pull_transfers_threads() {
 }
 
 #[test]
+fn plain_git_fetch_is_enough_after_init() {
+    let (_root, alice, bob) = setup();
+    let alice_store = Store::open(&alice).unwrap();
+    comment(&alice_store, "left for bob");
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
+
+    // init's own fetch already integrates existing data.
+    let bob_store = Store::open(&bob).unwrap();
+    commands::init(&bob_store, "origin").unwrap();
+    assert_eq!(bob_store.threads().unwrap().len(), 1);
+
+    // From then on a plain `git fetch` delivers new data into the tracking
+    // ref, and the opportunistic integration folds it in — no `threads pull`.
+    comment(&alice_store, "second round");
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
+    git(&bob, &["fetch", "-q", "origin"]);
+    assert_eq!(bob_store.threads().unwrap().len(), 1, "fetched but not yet integrated");
+    commands::integrate_fetched(&bob_store).unwrap();
+    assert_eq!(bob_store.threads().unwrap().len(), 2);
+}
+
+#[test]
 fn concurrent_publishes_converge_via_union_merge() {
     let (_root, alice, bob) = setup();
     let alice_store = Store::open(&alice).unwrap();
