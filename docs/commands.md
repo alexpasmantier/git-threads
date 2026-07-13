@@ -7,6 +7,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | command | what it does |
 |---|---|
 | [`init`](#git-threads-init) | one-time setup of a clone: configures fetching of threads data |
+| [`deinit`](#git-threads-deinit) | removes git-threads from a clone: configuration and all local data |
 | [`comment`](#git-threads-comment) | starts a thread on a change: its whole diff, one file of it, or a line range |
 | [`reply`](#git-threads-reply) | replies to a thread, or to a specific message in one |
 | [`edit`](#git-threads-edit) | replaces the text of one of your messages (appends an edit event) |
@@ -50,6 +51,19 @@ From then on, no extra command is needed to receive: every `git threads` command
 folding freshly fetched tracking-ref data into your local data (always conflict-free, never
 touching your drafts), so whatever your normal `git fetch` / `git pull` brought in is
 already there. `git threads pull` remains for fetching on demand.
+
+### `git threads deinit`
+
+```
+git threads deinit [--force]
+```
+
+The exact inverse of `init`, for this clone only: removes the fetch refspec from every
+remote and deletes everything under `refs/threads/` — data, drafts, tracking refs. The
+remote's threads data is untouched, so `init` starts over from it and the discussions come
+back. Unshared work is protected: drafts or local events that reached no remote make
+`deinit` refuse, with the way out named (`commit`/`push`, `discard --all`, or `--force` to
+drop them knowingly).
 
 ## Writing
 

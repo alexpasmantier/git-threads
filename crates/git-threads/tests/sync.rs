@@ -111,6 +111,36 @@ fn plain_git_fetch_is_enough_after_init() {
 }
 
 #[test]
+fn deinit_removes_everything_but_refuses_to_orphan_work() {
+    let (_root, alice, _bob) = setup();
+    let store = Store::open(&alice).unwrap();
+    commands::init(&store, "origin").unwrap();
+    comment(&store, "not shared yet");
+
+    // Drafts, then committed-but-unpushed events, block a plain deinit.
+    let err = commands::deinit(&store, false).unwrap_err();
+    assert!(err.to_string().contains("drafted"), "unexpected error: {err:#}");
+    commands::commit(&store).unwrap();
+    let err = commands::deinit(&store, false).unwrap_err();
+    assert!(err.to_string().contains("push"), "unexpected error: {err:#}");
+
+    // Once shared, deinit removes the refspec and every threads ref.
+    commands::push(&store, "origin").unwrap();
+    commands::deinit(&store, false).unwrap();
+    assert!(git(&alice, &["for-each-ref", "refs/threads"]).is_empty());
+    assert!(!git(&alice, &["config", "--get-all", "remote.origin.fetch"]).contains("threads"));
+
+    // The clean state a fresh init starts from — and the data comes back.
+    commands::init(&store, "origin").unwrap();
+    assert_eq!(store.threads().unwrap().len(), 1);
+
+    // --force discards unshared work knowingly.
+    comment(&store, "expendable");
+    commands::deinit(&store, true).unwrap();
+    assert!(git(&alice, &["for-each-ref", "refs/threads"]).is_empty());
+}
+
+#[test]
 fn concurrent_publishes_converge_via_union_merge() {
     let (_root, alice, bob) = setup();
     let alice_store = Store::open(&alice).unwrap();

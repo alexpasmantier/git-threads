@@ -51,6 +51,60 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove git-threads from this clone: the fetch refspecs on every remote and
+/// everything under `refs/threads/` (data, drafts, tracking refs). The
+/// remote's data is untouched — `init` starts over from it. Refuses to orphan
+/// unshared work (drafts, or local events on no remote) without `force`.
+pub fn deinit(store: &Store, force: bool) -> Result<()> {
+    let workdir = workdir(store)?;
+    if !force {
+        if store.drafts_tip()?.is_some() {
+            bail!(
+                "there are drafted events; `commit` and `push` to share them, \
+                 `discard --all` to drop them, or pass --force"
+            );
+        }
+        if let Some(local) = store.tip()? {
+            let mut published = false;
+            for remote in git(&workdir, &["remote"])?.lines() {
+                if let Some(tracking) = store.tracking_tip(remote)?
+                    && store.is_ancestor(local, tracking)?
+                {
+                    published = true;
+                    break;
+                }
+            }
+            if !published {
+                bail!(
+                    "local threads history has events on no remote; \
+                     `push` to share them, or pass --force"
+                );
+            }
+        }
+    }
+    for remote in git(&workdir, &["remote"])?.lines() {
+        let key = format!("remote.{remote}.fetch");
+        let refspec = fetch_refspec(remote);
+        let existing = git(&workdir, &["config", "--get-all", &key]).unwrap_or_default();
+        if existing.lines().any(|line| line == refspec) {
+            git(&workdir, &["config", "--fixed-value", "--unset-all", &key, &refspec])?;
+            println!("removed {refspec} from {key}");
+        }
+    }
+    let refs = git(&workdir, &["for-each-ref", "--format=%(refname)", "refs/threads/"])?;
+    let mut deleted = 0;
+    for name in refs.lines() {
+        git(&workdir, &["update-ref", "-d", name])?;
+        deleted += 1;
+    }
+    println!(
+        "deleted {deleted} ref{} under refs/threads/; the remote's data is untouched \
+         (git threads init to start again)",
+        if deleted == 1 { "" } else { "s" }
+    );
+    Ok(())
+}
+
 fn report_integration(integration: Integration, remote: &str) {
     match integration {
         Integration::UpToDate => println!("already up to date"),

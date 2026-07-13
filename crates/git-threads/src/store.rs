@@ -615,7 +615,7 @@ impl Store {
         Ok(())
     }
 
-    fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> Result<bool> {
+    pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> Result<bool> {
         if ancestor == descendant {
             return Ok(true);
         }

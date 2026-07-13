@@ -24,6 +24,12 @@ enum Command {
         #[arg(long, default_value = "origin")]
         remote: String,
     },
+    /// Remove git-threads from this clone: configuration and all local threads data
+    Deinit {
+        /// Proceed even when drafts or unpushed threads data would be lost
+        #[arg(long)]
+        force: bool,
+    },
     /// Start a new thread on a change: a whole diff, one file of it, or a line range
     Comment {
         /// Comment text; opens your editor if omitted
@@ -164,6 +170,7 @@ fn main() -> anyhow::Result<()> {
     }
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
+        Command::Deinit { force } => commands::deinit(&store, force),
         Command::Comment { message, target, file, side } => {
             let message = match message {
                 Some(text) => text,
