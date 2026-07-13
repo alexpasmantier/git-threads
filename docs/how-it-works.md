@@ -20,7 +20,10 @@ Code travels with the repository. git-threads makes the conversation travel with
 ## Threads, events, and anchors
 
 A **thread** is one conversation, pinned to one place in the code. The pin is called an
-**anchor** — it can point at a whole commit, a file, or a range of lines.
+**anchor** — it names the change under discussion (a diff: one commit's, or a whole
+branch's) and can point at that change as a whole, at one file of it, or at a range of
+lines. A note about code *as it stands* rather than about a change — an audit finding,
+archaeology — anchors to an **empty diff** (base = head).
 
 A thread contains **events**. An event is one thing that happened: someone commented, replied,
 edited their message, resolved the thread, or retracted a message. Events are **append-only**:

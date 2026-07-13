@@ -794,7 +794,7 @@ fn blob_at(
     Ok(Some((entry.object_id(), count)))
 }
 
-/// Split a trailing `:N` / `:N-M` off a `--file` value (`src/lib.rs:120-128`),
+/// Split a trailing `:N` / `:N-M` off a file spec (`src/lib.rs:120-128`),
 /// the same shape `list` and `show` print. The suffix only counts as lines
 /// when it parses as one, so a path that merely contains colons stays intact.
 fn split_line_suffix(spec: &str) -> (&str, Option<&str>) {
@@ -814,7 +814,7 @@ fn parse_lines(spec: &str) -> Result<LineRange> {
     let parse = |s: &str| {
         s.trim()
             .parse::<u32>()
-            .map_err(|_| anyhow!("invalid --lines {spec:?}: expected N or N-M"))
+            .map_err(|_| anyhow!("invalid lines {spec:?}: expected N or N-M"))
     };
     Ok(LineRange { start: parse(start)?, end: parse(end)? })
 }

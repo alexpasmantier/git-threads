@@ -7,7 +7,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | command | what it does |
 |---|---|
 | [`init`](#git-threads-init) | one-time setup of a clone: configures fetching of threads data |
-| [`comment`](#git-threads-comment) | starts a thread on a commit, a file, or a line range |
+| [`comment`](#git-threads-comment) | starts a thread on a change: its whole diff, one file of it, or a line range |
 | [`reply`](#git-threads-reply) | replies to a thread, or to a specific message in one |
 | [`edit`](#git-threads-edit) | replaces the text of one of your messages (appends an edit event) |
 | [`delete`](#git-threads-delete) | retracts one of your messages (appends a tombstone) |

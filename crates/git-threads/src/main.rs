@@ -24,7 +24,7 @@ enum Command {
         #[arg(long, default_value = "origin")]
         remote: String,
     },
-    /// Start a new thread on a commit, file, or line range
+    /// Start a new thread on a change: a whole diff, one file of it, or a line range
     Comment {
         /// Comment text; opens your editor if omitted
         #[arg(short, long)]
