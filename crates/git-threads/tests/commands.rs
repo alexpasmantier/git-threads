@@ -303,6 +303,9 @@ fn list_filters_by_change_and_open_state() {
     commands::comment(&store, &on_middle).unwrap();
     let on_tip = commands::comment(&store, &opts("on the tip")).unwrap();
     commands::resolve(&store, on_tip.as_str(), true).unwrap();
+    let mut on_file = opts("on the file");
+    on_file.file = Some("src/lib.rs:4".into());
+    commands::comment(&store, &on_file).unwrap();
 
     let list = |args: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
@@ -321,10 +324,35 @@ fn list_filters_by_change_and_open_state() {
     let both = list(&["HEAD~2..HEAD"]);
     assert!(both.contains("on the tip") && both.contains("middle"), "{both}");
 
-    // --open hides resolved threads; an emptied listing says so.
+    // --open hides resolved threads, --resolved keeps only them; an emptied
+    // listing says so.
     let open = list(&["HEAD~2..HEAD", "--open"]);
     assert!(open.contains("middle") && !open.contains("on the tip"), "{open}");
-    assert_eq!(list(&["HEAD~1..HEAD", "--open"]).trim(), "no threads");
+    let open_tip = list(&["HEAD~1..HEAD", "--open"]);
+    assert!(open_tip.contains("on the file") && !open_tip.contains("on the tip"), "{open_tip}");
+    let resolved = list(&["--resolved"]);
+    assert!(resolved.contains("on the tip") && !resolved.contains("middle"), "{resolved}");
+
+    // A lone path filters across all changes; directories match by prefix,
+    // a line suffix by overlap with the anchored lines.
+    let by_file = list(&["src/lib.rs"]);
+    assert!(by_file.contains("on the file") && !by_file.contains("on the tip"), "{by_file}");
+    assert!(list(&["src"]).contains("on the file"));
+    assert_eq!(list(&["src/lib.rs:1"]).trim(), "no threads");
+
+    // Change and path filters compose.
+    let composed = list(&["HEAD~1..HEAD", "src/lib.rs"]);
+    assert!(composed.contains("on the file") && !composed.contains("on the tip"), "{composed}");
+
+    // A spec that is neither a commit nor a known path is an error, not an
+    // empty listing.
+    let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+        .current_dir(path)
+        .args(["list", "nope"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("neither"));
 }
 
 #[test]

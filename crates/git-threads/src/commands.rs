@@ -402,16 +402,31 @@ pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
 }
 
 /// List threads in the current snapshot with their folded state and their
-/// re-anchor status against `at` (SPEC.md §4.2). `target` narrows to one
-/// change: threads whose anchored head commit lies within it. `open_only`
-/// hides resolved threads.
-pub fn list(store: &Store, target: Option<&str>, at: &str, open_only: bool) -> Result<()> {
+/// re-anchor status against `at` (SPEC.md §4.2). `target`/`file` narrow to
+/// one change and one path (grammar mirrors `comment`, except a lone file
+/// filters across all changes); `resolved` keeps only that state.
+pub fn list(
+    store: &Store,
+    target: Option<&str>,
+    file: Option<&str>,
+    at: &str,
+    resolved: Option<bool>,
+) -> Result<()> {
     let repo = store.repo();
     let mut threads = store.threads()?;
-    if let Some(spec) = target {
+    let (target, file) = match (target, file) {
+        (Some(spec), None) => resolve_list_filters(repo, &threads, spec)?,
+        (target, file) => (target.map(String::from), file.map(String::from)),
+    };
+    if let Some(spec) = &target {
         let (base, head) = resolve_diff(repo, spec)?;
         let commits = range_commits(repo, base, head)?;
         threads.retain(|t| commits.contains(t.anchor.diff.head.as_str()));
+    }
+    if let Some(spec) = &file {
+        let (path, lines) = split_line_suffix(spec);
+        let lines = lines.map(parse_lines).transpose()?;
+        threads.retain(|t| anchor_matches(&t.anchor, path, lines));
     }
     let at_commit = resolve_commit(repo, at)?;
     // Newest first, by earliest event timestamp.
@@ -419,7 +434,7 @@ pub fn list(store: &Store, target: Option<&str>, at: &str, open_only: bool) -> R
     let mut shown = 0;
     for thread in threads {
         let folded = fold_thread(thread.events.clone());
-        if open_only && folded.resolved {
+        if resolved.is_some_and(|want| folded.resolved != want) {
             continue;
         }
         shown += 1;
@@ -462,6 +477,52 @@ pub fn list(store: &Store, target: Option<&str>, at: &str, open_only: bool) -> R
         println!("no threads");
     }
     Ok(())
+}
+
+/// Sort out `list`'s lone positional: a change (commit or range) or a path
+/// filter. Same rev-vs-path disambiguation as `comment`, but a lone path
+/// means "across all changes" — so anchored paths count as paths even when
+/// the file no longer exists — and `./` forces the path reading, as in git.
+fn resolve_list_filters(
+    repo: &gix::Repository,
+    threads: &[ThreadRecord],
+    spec: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    if spec.contains("..") {
+        return Ok((Some(spec.to_string()), None));
+    }
+    if let Some(path) = spec.strip_prefix("./") {
+        return Ok((None, Some(path.to_string())));
+    }
+    let is_commit = resolve_commit(repo, spec).is_ok();
+    let (path, _) = split_line_suffix(spec);
+    let head = resolve_commit(repo, "HEAD")?;
+    // A file or directory in HEAD's tree, or any anchored path.
+    let is_file = repo.find_commit(head)?.tree()?.lookup_entry_by_path(path)?.is_some()
+        || threads.iter().any(|t| anchor_matches(&t.anchor, path, None));
+    match (is_commit, is_file) {
+        (true, true) => {
+            bail!("{spec:?} is both a commit and a path; write ./{spec} to mean the path")
+        }
+        (true, false) => Ok((Some(spec.to_string()), None)),
+        (false, true) => Ok((None, Some(spec.to_string()))),
+        (false, false) => bail!("{spec:?} is neither a commit nor a path with threads"),
+    }
+}
+
+/// Whether a thread's anchor is on `path` (the file itself, or under it as a
+/// directory) and, when a line range is given, overlaps it. Whole-file
+/// anchors overlap any lines.
+fn anchor_matches(anchor: &Anchor, path: &str, lines: Option<LineRange>) -> bool {
+    let path = path.trim_end_matches('/');
+    let on_path = anchor
+        .path
+        .as_deref()
+        .is_some_and(|p| p == path || p.strip_prefix(path).is_some_and(|r| r.starts_with('/')));
+    on_path
+        && lines.is_none_or(|want| {
+            anchor.lines.is_none_or(|have| want.start <= have.end && want.end >= have.start)
+        })
 }
 
 /// The commits making up `base..head` — the set a thread's anchored head must

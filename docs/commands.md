@@ -147,17 +147,28 @@ at `commit`.
 ### `git threads list`
 
 ```
-git threads list [TARGET] [--at <commit>] [--open]
+git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved]
 ```
 
-All threads — or, with `TARGET`, only those on one change: a commit, or a range like
-`main..topic` / `main...topic`, spelled exactly as for `comment`. A thread belongs to a
-change when its anchored head commit is one of the range's commits: per-commit comments on
-any commit of a branch, whole-diff comments on its tip, snapshot notes at those commits.
-`--open` keeps only unresolved threads, so the review question is one line:
+All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
+change (a commit, or a range like `main..topic` / `main...topic`), `FILE` a path within it.
+A thread belongs to a change when its anchored head commit is one of the range's commits:
+per-commit comments on any commit of a branch, whole-diff comments on its tip, snapshot
+notes at those commits. `--open` / `--resolved` keep only that state, so the review
+question is one line:
 
 ```console
 $ git threads list main...topic --open      # what still needs attention on this branch?
+```
+
+One difference from `comment`: a lone path filters across **all** changes — the archaeology
+view — and matches anchored paths even for files that no longer exist. Directories match by
+prefix, and a `path:lines` spec by overlap with the anchored lines; a name that is both a
+commit and a path is an error (write `./{name}` to mean the path).
+
+```console
+$ git threads list src/parser.rs            # every discussion this file ever had
+$ git threads list src/ --resolved          # settled questions under src/
 ```
 
 Each thread prints newest first: ID, open/resolved state, anchor location, re-anchored

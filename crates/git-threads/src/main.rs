@@ -99,14 +99,20 @@ enum Command {
     },
     /// List threads with their current state
     List {
-        /// Only threads on this change: a commit, or a range like main..topic or main...topic
+        /// Only threads on this change (a commit, or a range like main..topic or
+        /// main...topic) — or, alone, on this path across all changes
         target: Option<String>,
+        /// Only threads on this file or directory; a file may carry lines, e.g. src/lib.rs:120-128
+        file: Option<String>,
         /// Commit to re-anchor threads against
         #[arg(long, default_value = "HEAD")]
         at: String,
         /// Only unresolved threads
         #[arg(long)]
         open: bool,
+        /// Only resolved threads
+        #[arg(long, conflicts_with = "open")]
+        resolved: bool,
     },
     /// Generate man pages into a directory (for packaging)
     #[command(hide = true)]
@@ -207,8 +213,13 @@ fn main() -> anyhow::Result<()> {
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
-        Command::List { target, at, open } => {
-            commands::list(&store, target.as_deref(), &at, open)
+        Command::List { target, file, at, open, resolved } => {
+            let state = match (open, resolved) {
+                (true, _) => Some(false),
+                (_, true) => Some(true),
+                _ => None,
+            };
+            commands::list(&store, target.as_deref(), file.as_deref(), &at, state)
         }
         Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }
