@@ -60,6 +60,8 @@ $ cargo install --path crates/git-threads   # puts `git-threads` on PATH; git fi
 $ git threads init                          # once per clone: fetch discussions too
 $ git threads comment src/parser.rs:120-128 \
     -m "does this handle empty input?"      # start a thread on HEAD's change
+$ git threads comment main...topic src/parser.rs:120 \
+    -m "same, on a branch's whole diff"     # ranges work like git diff
 $ git threads list                          # threads, re-anchored to your checkout
 $ git threads show <thread-id>              # code context + conversation
 $ git threads commit                        # seal your drafts into local history

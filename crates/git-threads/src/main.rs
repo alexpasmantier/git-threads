@@ -29,20 +29,14 @@ enum Command {
         /// Comment text; opens your editor if omitted
         #[arg(short, long)]
         message: Option<String>,
-        /// What to comment on: a commit, a file, or file:lines, e.g. src/lib.rs:120-128 [default: HEAD]
+        /// What to comment on: a commit, a range like main..topic or main...topic,
+        /// or a file / file:lines of HEAD's change [default: HEAD]
         target: Option<String>,
-        /// Anchor the thread to this file; may carry the lines directly, e.g. src/lib.rs:120-128
-        #[arg(long)]
+        /// File within the target diff; may carry the lines directly, e.g. src/lib.rs:120-128
         file: Option<String>,
-        /// Line or line range within --file, e.g. 120 or 120-128
-        #[arg(long, requires = "file")]
-        lines: Option<String>,
-        /// Which version of --file the lines refer to
+        /// Which version of the file the lines refer to
         #[arg(long, value_enum, default_value_t = SideArg::New)]
         side: SideArg,
-        /// Diff base (defaults to the commit's first parent)
-        #[arg(long)]
-        base: Option<String>,
     },
     /// Reply to a thread, or to a specific message in one
     Reply {
@@ -155,19 +149,21 @@ fn main() -> anyhow::Result<()> {
     let store = Store::discover()?;
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
-        Command::Comment { message, target, file, lines, side, base } => {
+        Command::Comment { message, target, file, side } => {
             let message = match message {
                 Some(text) => text,
                 None => {
                     // Catch a bad target before the user types a message.
-                    commands::resolve_target(store.repo(), target.as_deref(), file.as_deref())?;
+                    commands::resolve_target(
+                        store.repo(),
+                        target.as_deref(),
+                        file.as_deref(),
+                        side.into(),
+                    )?;
                     editor::message(store.repo(), "", COMMENT_HINT)?
                 }
             };
-            commands::comment(
-                &store,
-                &CommentOpts { target, message, file, lines, side: side.into(), base },
-            )?;
+            commands::comment(&store, &CommentOpts { target, file, message, side: side.into() })?;
             Ok(())
         }
         Command::Reply { thread, message } => {

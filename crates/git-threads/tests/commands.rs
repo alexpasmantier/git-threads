@@ -40,14 +40,7 @@ fn setup_repo() -> tempfile::TempDir {
 }
 
 fn opts(message: &str) -> CommentOpts {
-    CommentOpts {
-        target: None,
-        message: message.into(),
-        file: None,
-        lines: None,
-        side: Side::New,
-        base: None,
-    }
+    CommentOpts { target: None, file: None, message: message.into(), side: Side::New }
 }
 
 #[test]
@@ -72,8 +65,7 @@ fn range_comment_resolves_blob_and_validates_lines() {
     let store = Store::open(dir.path()).unwrap();
 
     let mut range = opts("why is b empty?");
-    range.file = Some("src/lib.rs".into());
-    range.lines = Some("2-3".into());
+    range.file = Some("src/lib.rs:2-3".into());
     let thread_id = commands::comment(&store, &range).unwrap();
 
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
@@ -96,33 +88,9 @@ fn range_comment_resolves_blob_and_validates_lines() {
 
     // Out-of-range lines are rejected (file has 3 lines).
     let mut bad = opts("nope");
-    bad.file = Some("src/lib.rs".into());
-    bad.lines = Some("2-9".into());
+    bad.file = Some("src/lib.rs:2-9".into());
     let err = commands::comment(&store, &bad).unwrap_err();
     assert!(err.to_string().contains("out of range"), "unexpected error: {err:#}");
-}
-
-#[test]
-fn file_line_suffix_is_equivalent_to_lines() {
-    let dir = setup_repo();
-    let store = Store::open(dir.path()).unwrap();
-
-    let mut spec = opts("why is b empty?");
-    spec.file = Some("src/lib.rs:2-3".into());
-    let thread_id = commands::comment(&store, &spec).unwrap();
-
-    let thread = store.read_thread(&thread_id).unwrap().unwrap();
-    assert_eq!(thread.anchor.kind, AnchorKind::Range);
-    assert_eq!(thread.anchor.path.as_deref(), Some("src/lib.rs"));
-    let lines = thread.anchor.lines.unwrap();
-    assert_eq!((lines.start, lines.end), (2, 3));
-
-    // Explicit --lines alongside a suffix is a conflict, not a silent pick.
-    let mut both = opts("nope");
-    both.file = Some("src/lib.rs:2".into());
-    both.lines = Some("3".into());
-    let err = commands::comment(&store, &both).unwrap_err();
-    assert!(err.to_string().contains("conflicts"), "unexpected error: {err:#}");
 }
 
 #[test]
@@ -148,6 +116,37 @@ fn positional_target_takes_commit_or_file() {
     bad.target = Some("no/such/thing".into());
     let err = commands::comment(&store, &bad).unwrap_err();
     assert!(err.to_string().contains("neither"), "unexpected error: {err:#}");
+}
+
+#[test]
+fn range_target_sets_the_diff_and_takes_a_file_positional() {
+    let dir = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let rev = |spec: &str| git_out(dir.path(), &["rev-parse", spec]);
+
+    // A two-dot range names the diff base explicitly.
+    let mut range = opts("across both commits");
+    range.target = Some("HEAD~1..HEAD".into());
+    range.file = Some("src/lib.rs:2-3".into());
+    let thread = store.read_thread(&commands::comment(&store, &range).unwrap()).unwrap().unwrap();
+    assert_eq!(thread.anchor.kind, AnchorKind::Range);
+    assert_eq!(thread.anchor.diff.base.as_str(), rev("HEAD~1"));
+    assert_eq!(thread.anchor.diff.head.as_str(), rev("HEAD"));
+
+    // Three dots diff against the merge base; an empty side means HEAD.
+    let mut merge = opts("branch-level");
+    merge.target = Some("HEAD~1...".into());
+    let thread = store.read_thread(&commands::comment(&store, &merge).unwrap()).unwrap().unwrap();
+    assert_eq!(thread.anchor.kind, AnchorKind::Commit);
+    assert_eq!(thread.anchor.diff.base.as_str(), rev("HEAD~1"));
+    assert_eq!(thread.anchor.diff.head.as_str(), rev("HEAD"));
+
+    // Anything that looks like a range is one — a bad side errors instead of
+    // falling back to the file interpretation.
+    let mut bad = opts("nope");
+    bad.target = Some("nope..HEAD".into());
+    let err = commands::comment(&store, &bad).unwrap_err();
+    assert!(err.to_string().contains("cannot resolve"), "unexpected error: {err:#}");
 }
 
 #[test]
@@ -193,16 +192,14 @@ fn old_side_comment_reads_base_blob() {
     let store = Store::open(dir.path()).unwrap();
 
     let mut old = opts("this only had one line before");
-    old.file = Some("src/lib.rs".into());
-    old.lines = Some("1".into());
+    old.file = Some("src/lib.rs:1".into());
     old.side = Side::Old;
     let thread_id = commands::comment(&store, &old).unwrap();
 
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
     // Base version has exactly 1 line, so line 1 is valid but line 2 is not.
     let mut bad = opts("nope");
-    bad.file = Some("src/lib.rs".into());
-    bad.lines = Some("2".into());
+    bad.file = Some("src/lib.rs:2".into());
     bad.side = Side::Old;
     assert!(commands::comment(&store, &bad).is_err());
     assert_eq!(thread.anchor.side, Some(Side::Old));
@@ -252,13 +249,13 @@ fn thread_prefix_lookup_errors() {
 }
 
 #[test]
-fn root_commit_requires_explicit_base() {
+fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
     let mut on_root = opts("first!");
     on_root.target = Some("HEAD~1".into()); // the root commit — no parent
     let err = commands::comment(&store, &on_root).unwrap_err();
-    assert!(err.to_string().contains("--base"), "unexpected error: {err:#}");
+    assert!(err.to_string().contains("has no parent"), "unexpected error: {err:#}");
 }
 
 #[test]

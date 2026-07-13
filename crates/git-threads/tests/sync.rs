@@ -55,14 +55,7 @@ fn setup() -> (tempfile::TempDir, PathBuf, PathBuf) {
 fn comment(store: &Store, message: &str) -> git_threads_core::ThreadId {
     commands::comment(
         store,
-        &CommentOpts {
-            target: None,
-            message: message.into(),
-            file: None,
-            lines: None,
-            side: Side::New,
-            base: None,
-        },
+        &CommentOpts { target: None, file: None, message: message.into(), side: Side::New },
     )
     .unwrap()
 }

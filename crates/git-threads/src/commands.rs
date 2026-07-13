@@ -47,44 +47,25 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
 }
 
 pub struct CommentOpts {
-    /// What is being discussed: a commit-ish, a file path, or `path:lines`.
-    /// `None` means HEAD's change.
+    /// What is being discussed: a commit-ish, a range (`A..B`, `A...B`), or —
+    /// alone — a file path or `path:lines` of HEAD's change.
     pub target: Option<String>,
-    pub message: String,
+    /// File within the target diff, optionally carrying lines (`path:120-128`).
     pub file: Option<String>,
-    /// `"120"` or `"120-128"`; requires `file`.
-    pub lines: Option<String>,
+    pub message: String,
     pub side: Side,
-    /// Diff base; defaults to the first parent of the commit.
-    pub base: Option<String>,
 }
 
 /// Create a new thread anchored to a commit, file, or line range (SPEC.md §3).
 pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     let repo = store.repo();
-    let (commit, file) = resolve_target(repo, opts.target.as_deref(), opts.file.as_deref())?;
-    let head = resolve_commit(repo, &commit)?;
-    let base = match &opts.base {
-        Some(spec) => resolve_commit(repo, spec)?,
-        None => repo
-            .find_commit(head)?
-            .parent_ids()
-            .next()
-            .map(|id| id.detach())
-            .with_context(|| {
-                format!("{commit} has no parent; pass --base to choose a diff base")
-            })?,
-    };
+    let Target { base, head, file } =
+        resolve_target(repo, opts.target.as_deref(), opts.file.as_deref(), opts.side)?;
 
-    let (kind, path, lines, blob) = match (&file, &opts.lines) {
-        (None, None) => (AnchorKind::Commit, None, None, None),
-        (None, Some(_)) => bail!("--lines requires --file"),
-        (Some(spec), lines) => {
+    let (kind, path, lines, blob) = match &file {
+        None => (AnchorKind::Commit, None, None, None),
+        Some(spec) => {
             let (file, suffix) = split_line_suffix(spec);
-            if suffix.is_some() && lines.is_some() {
-                bail!("--lines conflicts with the line suffix in --file {spec:?}");
-            }
-            let lines = suffix.or(lines.as_deref());
             // The blob is resolved on the anchor's side: `new` reads the head
             // tree, `old` the base tree (e.g. comments on deleted lines).
             let side_commit = match opts.side {
@@ -101,7 +82,7 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
                     side_commit
                 )
             })?;
-            let lines = lines
+            let lines = suffix
                 .map(|spec| {
                     let range = parse_lines(spec)?;
                     if range.end as usize > line_count {
@@ -144,31 +125,91 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     Ok(thread_id)
 }
 
-/// Sort out what `comment`'s positional refers to — a commit, or a file
-/// (path or path:lines) of HEAD's change — the way git disambiguates
-/// revs from paths. Returns the commit spec and the file spec, if any.
+/// The diff a comment targets, and the file within it, if any.
+pub struct Target {
+    pub base: ObjectId,
+    pub head: ObjectId,
+    pub file: Option<String>,
+}
+
+/// Sort out what `comment`'s positionals refer to, the way git disambiguates
+/// revs from paths. The first positional names the diff — a commit (its
+/// first-parent change) or a range — and, when it's the only one, may instead
+/// be a file (path or path:lines) of HEAD's change. The second positional is
+/// always a file.
 pub fn resolve_target(
     repo: &gix::Repository,
     target: Option<&str>,
     file: Option<&str>,
-) -> Result<(String, Option<String>)> {
+    side: Side,
+) -> Result<Target> {
     let Some(spec) = target else {
-        return Ok(("HEAD".into(), file.map(String::from)));
+        let (base, head) = resolve_diff(repo, "HEAD")?;
+        return Ok(Target { base, head, file: file.map(String::from) });
     };
     if file.is_some() {
-        // --file names the file, so the positional can only be the commit.
-        return Ok((spec.to_string(), file.map(String::from)));
+        // The second positional names the file, so the first can only be the diff.
+        let (base, head) = resolve_diff(repo, spec)?;
+        return Ok(Target { base, head, file: file.map(String::from) });
+    }
+    if spec.contains("..") {
+        // Anything that looks like a range is one, as in git.
+        let (base, head) = resolve_diff(repo, spec)?;
+        return Ok(Target { base, head, file: None });
     }
     let is_commit = resolve_commit(repo, spec).is_ok();
     let (path, _) = split_line_suffix(spec);
-    let is_file = blob_at(repo, resolve_commit(repo, "HEAD")?, path)?.is_some();
+    // A lone file positional means HEAD's change, so its blob lives in the
+    // tree of the anchor's side: HEAD for `new`, HEAD's parent for `old`.
+    let side_rev = match side {
+        Side::New => "HEAD",
+        Side::Old => "HEAD^",
+    };
+    let is_file = match resolve_commit(repo, side_rev) {
+        Ok(commit) => blob_at(repo, commit, path)?.is_some(),
+        Err(_) => false,
+    };
     match (is_commit, is_file) {
         (true, true) => {
-            bail!("{spec:?} is both a commit and a file; pass --file {spec:?} to mean the file")
+            bail!("{spec:?} is both a commit and a file; write `comment HEAD {spec}` to mean the file")
         }
-        (true, false) => Ok((spec.to_string(), None)),
-        (false, true) => Ok(("HEAD".into(), Some(spec.to_string()))),
+        (true, false) => {
+            let (base, head) = resolve_diff(repo, spec)?;
+            Ok(Target { base, head, file: None })
+        }
+        (false, true) => {
+            let (base, head) = resolve_diff(repo, "HEAD")?;
+            Ok(Target { base, head, file: Some(spec.to_string()) })
+        }
         (false, false) => bail!("{spec:?} is neither a commit nor a file in HEAD"),
+    }
+}
+
+/// Resolve a diff spec into (base, head): `A..B` diffs the two commits,
+/// `A...B` diffs B against merge-base(A, B) — both as in `git diff` — and a
+/// bare commit means its first-parent change. Empty range sides mean HEAD.
+fn resolve_diff(repo: &gix::Repository, spec: &str) -> Result<(ObjectId, ObjectId)> {
+    let end = |s: &str| resolve_commit(repo, if s.is_empty() { "HEAD" } else { s });
+    if let Some((a, b)) = spec.split_once("...") {
+        let (a, b) = (end(a)?, end(b)?);
+        let base = repo
+            .merge_base(a, b)
+            .with_context(|| format!("no merge base between {a} and {b}"))?
+            .detach();
+        Ok((base, b))
+    } else if let Some((a, b)) = spec.split_once("..") {
+        Ok((end(a)?, end(b)?))
+    } else {
+        let head = resolve_commit(repo, spec)?;
+        let base = repo
+            .find_commit(head)?
+            .parent_ids()
+            .next()
+            .map(|id| id.detach())
+            .with_context(|| {
+                format!("{spec} has no parent; comment on a range instead (<base>..{spec})")
+            })?;
+        Ok((base, head))
     }
 }
 

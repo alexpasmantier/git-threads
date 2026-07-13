@@ -61,11 +61,9 @@ fn setup() -> (tempfile::TempDir, Store, ThreadId) {
         &store,
         &CommentOpts {
             target: None,
+            file: Some("code.rs:7-9".into()),
             message: "beta needs a doc comment".into(),
-            file: Some("code.rs".into()),
-            lines: Some("7-9".into()),
             side: Side::New,
-            base: None,
         },
     )
     .unwrap();
@@ -185,14 +183,7 @@ fn commit_anchor_has_nothing_to_remap() {
     let (dir, store, _) = setup();
     let whole = commands::comment(
         &store,
-        &CommentOpts {
-            target: None,
-            message: "commit-level".into(),
-            file: None,
-            lines: None,
-            side: Side::New,
-            base: None,
-        },
+        &CommentOpts { target: None, file: None, message: "commit-level".into(), side: Side::New },
     )
     .unwrap();
     let anchor = anchor_of(&store, &whole);

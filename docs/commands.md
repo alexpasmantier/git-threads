@@ -51,33 +51,37 @@ never ran `init` still works.
 ### `git threads comment`
 
 ```
-git threads comment [TARGET] [-m <text>] [--file <path> [--lines N | N-M]] [--side old|new] [--base <commit>]
+git threads comment [TARGET] [FILE] [-m <text>] [--side old|new]
 ```
 
-Starts a new thread on `TARGET` — a commit-ish, a file path, or `path:lines`,
-disambiguated the way git tells revs from paths (a name that is both is an error;
-pass `--file` to mean the file). Without `-m`, your editor opens, resolved the way git
-resolves it (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) — the same goes for
-`reply` and `edit`.
+Starts a new thread. `TARGET` names the diff being discussed; `FILE` (a path or
+`path:lines`) narrows the thread to one file or line range of it. Without `-m`, your
+editor opens, resolved the way git resolves it (`GIT_EDITOR`, `core.editor`, `VISUAL`,
+`EDITOR`) — the same goes for `reply` and `edit`.
 
-| target | thread is about |
+| target | diff being discussed |
 |---|---|
-| nothing, or a commit | the whole change (of `HEAD`, or of that commit) |
-| `src/parser.rs` | one file's change at `HEAD` |
-| `src/parser.rs:120` or `:120-128` | specific lines (1-based, inclusive) |
+| nothing, or a commit | that commit's change (against its first parent; default `HEAD`) |
+| `main..topic` | between the two commits, as in `git diff` |
+| `main...topic` | `topic` against its merge-base with `main` — the PR shape |
 
-To anchor a file at some other commit, name the commit and pass `--file` — which takes
-the same `path:lines` shape, so locations printed by `list` and `show` can be pasted
-straight back in. Combining the suffix with `--lines` is an error.
+An empty range side means `HEAD` (`main...` discusses your checkout against `main`). On a
+merge or root commit, where the first parent is ambiguous or missing, name the base with a
+range. As the only argument, `TARGET` may also be a file of HEAD's change, disambiguated
+the way git tells revs from paths — a name that is both is an error; write
+`comment HEAD <name>` to mean the file.
 
-`--side old` anchors to the base version of the file (e.g. commenting on deleted lines);
-the default `new` is the version after the change. `--base` overrides the diff base — needed
-on a root commit, useful to pick a parent of a merge commit or a branch's merge-base.
-Line numbers are validated against the actual file.
+`FILE` takes the same `path:lines` shape that `list` and `show` print, so locations can be
+pasted straight back in. Line numbers (1-based, inclusive) are validated against the
+actual file. `--side old` anchors to the base version of the file (e.g. commenting on
+deleted lines); the default `new` is the version after the change.
 
 ```console
 $ git threads comment src/parser.rs:120-128 -m "does this handle empty input?"
 drafted thread 84727c6d0f7c21c40ee8768996a20f540d6b1304 (commit and push to share)
+
+$ git threads comment main...topic src/parser.rs:120-128 -m "same, but on a branch's diff"
+drafted thread 662487d5825d7c21c40ee8768996a20f540d6b13 (commit and push to share)
 ```
 
 ### `git threads reply`
