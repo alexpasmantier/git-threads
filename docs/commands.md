@@ -76,6 +76,12 @@ pasted straight back in. Line numbers (1-based, inclusive) are validated against
 actual file. `--side old` anchors to the base version of the file (e.g. commenting on
 deleted lines); the default `new` is the version after the change.
 
+A file or line comment must touch its diff: the file changed in it, and the lines
+overlapping a hunk or its three lines of display context. Annotating code *as it stands* —
+an audit note, archaeology — is spelled explicitly with an **empty diff**:
+`git threads comment HEAD..HEAD src/parser.rs:120` says "about this code", not "about a
+change to it".
+
 ```console
 $ git threads comment src/parser.rs:120-128 -m "does this handle empty input?"
 drafted thread 84727c6d0f7c21c40ee8768996a20f540d6b1304 (commit and push to share)

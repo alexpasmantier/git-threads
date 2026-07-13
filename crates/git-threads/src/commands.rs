@@ -91,6 +91,11 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
                     Ok(range)
                 })
                 .transpose()?;
+            // A comment on a diff must be about that diff; an empty diff
+            // (base == head) is the deliberate snapshot-annotation spelling.
+            if base != head {
+                ensure_in_diff(repo, base, head, file, opts.side, lines)?;
+            }
             let kind = if lines.is_some() { AnchorKind::Range } else { AnchorKind::File };
             let blob = GitOid::from_hex(blob_id.to_string())?;
             (kind, Some(file.to_string()), lines, Some(blob))
@@ -183,6 +188,80 @@ pub fn resolve_target(
         }
         (false, false) => bail!("{spec:?} is neither a commit nor a file in HEAD"),
     }
+}
+
+/// How far outside a hunk a comment may still sit — the unified-diff context
+/// a reviewer sees, and the same width snippets carry.
+const HUNK_CONTEXT: u32 = 3;
+
+/// Reject comments that don't touch their diff: the file must be changed
+/// between `base` and `head`, and `lines` (if any) must overlap a hunk on
+/// `side`, give or take [`HUNK_CONTEXT`] lines.
+fn ensure_in_diff(
+    repo: &gix::Repository,
+    base: ObjectId,
+    head: ObjectId,
+    path: &str,
+    side: Side,
+    lines: Option<LineRange>,
+) -> Result<()> {
+    let (base_hex, head_hex) = (base.to_string(), head.to_string());
+    let diff = git(
+        repo.git_dir(),
+        &["diff", "--unified=0", &base_hex, &head_hex, "--", path],
+    )?;
+    let shown = format!("{}..{}", &base_hex[..12], &head_hex[..12]);
+    let hint = format!(
+        "comment on {0}..{0} (an empty diff) to annotate the file as it stands",
+        &head_hex[..12]
+    );
+    if diff.is_empty() {
+        bail!("{path:?} is unchanged in {shown}; {hint}");
+    }
+    let Some(lines) = lines else { return Ok(()) };
+    let spans = hunk_spans(&diff, side);
+    let in_context = |&(start, len): &(u32, u32)| {
+        let lo = start.saturating_sub(HUNK_CONTEXT).max(1);
+        let hi = start + len.max(1) - 1 + HUNK_CONTEXT;
+        lines.start <= hi && lines.end >= lo
+    };
+    if !spans.iter().any(in_context) {
+        let changed = spans
+            .iter()
+            .map(|&(start, len)| match len {
+                0 | 1 => start.to_string(),
+                _ => format!("{start}-{}", start + len - 1),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "lines {}-{} of {path:?} are outside the change {shown} (changed: {changed}); {hint}",
+            lines.start,
+            lines.end
+        );
+    }
+    Ok(())
+}
+
+/// (start, length) of each hunk on `side`, in 1-based file coordinates, from
+/// unified-diff `@@ -a,b +c,d @@` headers. A zero length marks the point next
+/// to lines added or removed on the other side.
+fn hunk_spans(diff: &str, side: Side) -> Vec<(u32, u32)> {
+    diff.lines()
+        .filter(|line| line.starts_with("@@"))
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().skip(1);
+            let token = match side {
+                Side::Old => fields.next()?.strip_prefix('-')?,
+                Side::New => fields.nth(1)?.strip_prefix('+')?,
+            };
+            let (start, len) = match token.split_once(',') {
+                Some((start, len)) => (start.parse().ok()?, len.parse().ok()?),
+                None => (token.parse().ok()?, 1),
+            };
+            Some((start, len))
+        })
+        .collect()
 }
 
 /// Resolve a diff spec into (base, head): `A..B` diffs the two commits,

@@ -91,12 +91,14 @@ Each thread directory contains one immutable `anchor.json`:
 ### 3.1 Fields
 
 - `kind`: `commit` (whole-change comment; no `path`/`lines`), `file` (per-file; no `lines`), or `range`.
-- `diff.base` / `diff.head`: the two commits whose diff the comment was made against. For a single-commit thread, `base` is the (chosen) parent of `head` — this disambiguates merge commits. For a branch-level discussion, `base` is the merge-base **at the time of commenting**, pinning exactly what the author saw.
+- `diff.base` / `diff.head`: the two commits whose diff the comment was made against. For a single-commit thread, `base` is the (chosen) parent of `head` — this disambiguates merge commits. For a branch-level discussion, `base` is the merge-base **at the time of commenting**, pinning exactly what the author saw. `base == head` is the **empty diff**: the thread annotates the state of `head` itself (an audit note, archaeology) rather than a change.
 - `path`: the file path on `side`. `old_path` MUST be present iff the file was renamed within this diff.
 - `side`: `old` (base version — e.g. deleted lines) or `new`. Comments on unchanged context lines use `new`.
 - `lines`: 1-based, inclusive, **file coordinates on `side`** — never diff/patch positions.
 - `blob`: SHA of the file version on `side`. Redundant by construction; serves as an integrity check. If resolving `head:path` yields a different blob, readers MUST flag the anchor instead of rendering it.
 - `cols` (optional, reserved): `{ "start": n, "end": n }` sub-line span; clients MAY ignore.
+
+`file` and `range` anchors SHOULD lie within their diff: the file changed between `base` and `head`, and `lines` overlapping a hunk on `side` or its display context (±3 lines). A comment about code irrespective of any change belongs on an empty diff, not on whichever commit was checked out.
 
 Anchors are always valid against their own `diff` — they never "break." Displaying a thread on any *other* commit is re-anchoring (§4), which is computed, never stored.
 

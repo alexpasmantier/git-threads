@@ -249,6 +249,47 @@ fn thread_prefix_lookup_errors() {
 }
 
 #[test]
+fn comments_must_touch_the_diff_unless_it_is_empty() {
+    let dir = setup_repo();
+    let path = dir.path();
+    // A 12-line file, then a change to its last line only.
+    let lines: Vec<String> = (1..=12).map(|n| format!("line {n}")).collect();
+    fs::write(path.join("notes.txt"), lines.join("\n") + "\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "add notes"]);
+    let mut changed = lines.clone();
+    changed[11] = "line 12, revised".into();
+    fs::write(path.join("notes.txt"), changed.join("\n") + "\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "revise last line"]);
+    let store = Store::open(path).unwrap();
+
+    // Changed and nearby-context lines are fine; far-away lines are not.
+    let mut on_change = opts("on the change");
+    on_change.file = Some("notes.txt:10-12".into());
+    commands::comment(&store, &on_change).unwrap();
+    let mut outside = opts("nope");
+    outside.file = Some("notes.txt:2".into());
+    let err = commands::comment(&store, &outside).unwrap_err();
+    assert!(err.to_string().contains("outside the change"), "unexpected error: {err:#}");
+    assert!(err.to_string().contains("an empty diff"), "unexpected error: {err:#}");
+
+    // A file the diff never touches is rejected at any granularity.
+    let mut untouched = opts("nope");
+    untouched.file = Some("src/lib.rs".into());
+    let err = commands::comment(&store, &untouched).unwrap_err();
+    assert!(err.to_string().contains("unchanged"), "unexpected error: {err:#}");
+
+    // The escape hatch: an empty diff annotates the snapshot, no questions asked.
+    let mut snapshot = opts("audit note");
+    snapshot.target = Some("HEAD..HEAD".into());
+    snapshot.file = Some("notes.txt:2".into());
+    let thread =
+        store.read_thread(&commands::comment(&store, &snapshot).unwrap()).unwrap().unwrap();
+    assert_eq!(thread.anchor.diff.base, thread.anchor.diff.head);
+}
+
+#[test]
 fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

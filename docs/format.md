@@ -104,7 +104,8 @@ The design records *precisely what the commenter saw*, so the anchor never needs
 - `diff.base` / `diff.head` — the two commits whose diff was reviewed. For a single-commit
   thread, `base` is the chosen parent of `head` (disambiguating merge commits). For a
   branch-level discussion, `base` is the merge-base *at the time of commenting* — pinning the
-  exact diff even if the target branch moves later.
+  exact diff even if the target branch moves later. Equal `base` and `head` are the *empty
+  diff*: the thread annotates the state of `head` itself, not a change.
 - `side` — `old` or `new`: which version of the file `path` and `lines` refer to. Comments on
   deleted lines anchor to the `old` side; comments on unchanged context lines use `new`.
 - `lines` — 1-based, inclusive, **file coordinates on `side`**. Never diff/patch positions:
