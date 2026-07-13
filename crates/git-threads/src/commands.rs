@@ -286,7 +286,7 @@ fn resolve_diff(repo: &gix::Repository, spec: &str) -> Result<(ObjectId, ObjectI
             .next()
             .map(|id| id.detach())
             .with_context(|| {
-                format!("{spec} has no parent; comment on a range instead (<base>..{spec})")
+                format!("{spec} has no parent; name a range instead (<base>..{spec})")
             })?;
         Ok((base, head))
     }
@@ -402,25 +402,34 @@ pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
 }
 
 /// List threads in the current snapshot with their folded state and their
-/// re-anchor status against `at` (SPEC.md §4.2).
-pub fn list(store: &Store, at: &str) -> Result<()> {
+/// re-anchor status against `at` (SPEC.md §4.2). `target` narrows to one
+/// change: threads whose anchored head commit lies within it. `open_only`
+/// hides resolved threads.
+pub fn list(store: &Store, target: Option<&str>, at: &str, open_only: bool) -> Result<()> {
+    let repo = store.repo();
     let mut threads = store.threads()?;
-    if threads.is_empty() {
-        println!("no threads");
-        return Ok(());
+    if let Some(spec) = target {
+        let (base, head) = resolve_diff(repo, spec)?;
+        let commits = range_commits(repo, base, head)?;
+        threads.retain(|t| commits.contains(t.anchor.diff.head.as_str()));
     }
-    let target = resolve_commit(store.repo(), at)?;
+    let at_commit = resolve_commit(repo, at)?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
+    let mut shown = 0;
     for thread in threads {
         let folded = fold_thread(thread.events.clone());
+        if open_only && folded.resolved {
+            continue;
+        }
+        shown += 1;
         let status = if folded.resolved { "resolved" } else { "open" };
         let location = match (&thread.anchor.path, &thread.anchor.lines) {
             (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
             (Some(path), None) => path.clone(),
             _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
         };
-        let placement = match reanchor::reanchor(store, &thread.anchor, target)? {
+        let placement = match reanchor::reanchor(store, &thread.anchor, at_commit)? {
             Reanchor::WholeCommit | Reanchor::Located { status: ReanchorStatus::Exact, .. } => {
                 String::new()
             }
@@ -449,7 +458,24 @@ pub fn list(store: &Store, at: &str) -> Result<()> {
             if folded.events.len() == 1 { "" } else { "s" },
         );
     }
+    if shown == 0 {
+        println!("no threads");
+    }
     Ok(())
+}
+
+/// The commits making up `base..head` — the set a thread's anchored head must
+/// fall in to belong to that change. An empty diff is just its own commit.
+fn range_commits(
+    repo: &gix::Repository,
+    base: ObjectId,
+    head: ObjectId,
+) -> Result<std::collections::HashSet<String>> {
+    if base == head {
+        return Ok(std::iter::once(head.to_string()).collect());
+    }
+    let out = git(repo.git_dir(), &["rev-list", &format!("{base}..{head}")])?;
+    Ok(out.lines().map(str::to_string).collect())
 }
 
 /// Render a thread: anchor location, re-anchor placement on `at` (SPEC.md

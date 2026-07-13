@@ -290,6 +290,44 @@ fn comments_must_touch_the_diff_unless_it_is_empty() {
 }
 
 #[test]
+fn list_filters_by_change_and_open_state() {
+    let dir = setup_repo();
+    let path = dir.path();
+    fs::write(path.join("src/lib.rs"), "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "add d"]);
+    let store = Store::open(path).unwrap();
+
+    let mut on_middle = opts("on the middle commit");
+    on_middle.target = Some("HEAD~1".into());
+    commands::comment(&store, &on_middle).unwrap();
+    let on_tip = commands::comment(&store, &opts("on the tip")).unwrap();
+    commands::resolve(&store, on_tip.as_str(), true).unwrap();
+
+    let list = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .arg("list")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    // A range keeps only threads whose anchored head is one of its commits.
+    let tip_only = list(&["HEAD~1..HEAD"]);
+    assert!(tip_only.contains("on the tip") && !tip_only.contains("middle"), "{tip_only}");
+    let both = list(&["HEAD~2..HEAD"]);
+    assert!(both.contains("on the tip") && both.contains("middle"), "{both}");
+
+    // --open hides resolved threads; an emptied listing says so.
+    let open = list(&["HEAD~2..HEAD", "--open"]);
+    assert!(open.contains("middle") && !open.contains("on the tip"), "{open}");
+    assert_eq!(list(&["HEAD~1..HEAD", "--open"]).trim(), "no threads");
+}
+
+#[test]
 fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

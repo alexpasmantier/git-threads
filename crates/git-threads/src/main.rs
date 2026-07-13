@@ -99,9 +99,14 @@ enum Command {
     },
     /// List threads with their current state
     List {
+        /// Only threads on this change: a commit, or a range like main..topic or main...topic
+        target: Option<String>,
         /// Commit to re-anchor threads against
         #[arg(long, default_value = "HEAD")]
         at: String,
+        /// Only unresolved threads
+        #[arg(long)]
+        open: bool,
     },
     /// Generate man pages into a directory (for packaging)
     #[command(hide = true)]
@@ -202,7 +207,9 @@ fn main() -> anyhow::Result<()> {
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
-        Command::List { at } => commands::list(&store, &at),
+        Command::List { target, at, open } => {
+            commands::list(&store, target.as_deref(), &at, open)
+        }
         Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }
 }

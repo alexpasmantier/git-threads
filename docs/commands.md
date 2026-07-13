@@ -13,7 +13,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | [`delete`](#git-threads-delete) | retracts one of your messages (appends a tombstone) |
 | [`resolve`](#git-threads-resolve) | resolves a thread (`--reopen` to reopen) |
 | [`discard`](#git-threads-discard) | removes a drafted event before it's shared (`--all` for every draft) |
-| [`list`](#git-threads-list) | all threads, with their re-anchor status against your current code |
+| [`list`](#git-threads-list) | all threads — or one change's — with their re-anchor status against your current code |
 | [`show`](#git-threads-show) | one thread: its code context (re-anchored) and conversation |
 | [`commit`](#git-threads-commit) | seals everything you've drafted into local history, as one batch |
 | [`push`](#git-threads-push) | shares your local discussion history (the fetch–union–push loop) |
@@ -147,12 +147,23 @@ at `commit`.
 ### `git threads list`
 
 ```
-git threads list [--at <commit>]        # default: HEAD
+git threads list [TARGET] [--at <commit>] [--open]
 ```
 
-All threads, newest first: ID, open/resolved state, anchor location, re-anchored placement
-against `--at` (`→ path:lines (relocated|fuzzy(f))`, `(outdated)`, or nothing when the anchor
-still matches exactly), message and draft counts, and the first line of the root comment.
+All threads — or, with `TARGET`, only those on one change: a commit, or a range like
+`main..topic` / `main...topic`, spelled exactly as for `comment`. A thread belongs to a
+change when its anchored head commit is one of the range's commits: per-commit comments on
+any commit of a branch, whole-diff comments on its tip, snapshot notes at those commits.
+`--open` keeps only unresolved threads, so the review question is one line:
+
+```console
+$ git threads list main...topic --open      # what still needs attention on this branch?
+```
+
+Each thread prints newest first: ID, open/resolved state, anchor location, re-anchored
+placement against `--at` (default `HEAD`; `→ path:lines (relocated|fuzzy(f))`, `(outdated)`,
+or nothing when the anchor still matches exactly), message and draft counts, and the first
+line of the root comment.
 
 ### `git threads show`
 

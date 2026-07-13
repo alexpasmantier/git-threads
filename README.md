@@ -63,6 +63,7 @@ $ git threads comment src/parser.rs:120-128 \
 $ git threads comment main...topic src/parser.rs:120 \
     -m "same, on a branch's whole diff"     # ranges work like git diff
 $ git threads list                          # threads, re-anchored to your checkout
+$ git threads list main...topic --open      # what still needs attention on this branch
 $ git threads show <thread-id>              # code context + conversation
 $ git threads commit                        # seal your drafts into local history
 $ git threads push                          # share; safe under concurrent pushes
