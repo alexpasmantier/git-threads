@@ -173,7 +173,7 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 ### `git threads list`
 
 ```
-git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline]
+git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline] [-p]
 ```
 
 All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
@@ -203,7 +203,8 @@ message and draft counts when they say something), `Author:` / `Date:` / `Anchor
 a `Now:` field when the thread moved (`(relocated)` / `(fuzzy(f))` against `--at`, default
 `HEAD`), and the root comment indented below. `--oneline` compresses each thread to one
 line — ID, decorations, location, first line of the root — the way `git log --oneline`
-does.
+does. `-p` / `--patch` appends each thread's code snippet (re-anchored against `--at`),
+the way `git log -p` appends patches; it composes with `--oneline`.
 
 ### `git threads show`
 

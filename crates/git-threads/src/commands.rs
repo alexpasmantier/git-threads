@@ -524,6 +524,7 @@ pub fn list(
     at: &str,
     resolved: Option<bool>,
     oneline: bool,
+    patch: bool,
 ) -> Result<()> {
     let repo = store.repo();
     let mut threads = store.threads()?;
@@ -590,6 +591,9 @@ pub fn list(
                 .next()
                 .unwrap_or("");
             println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
+            if patch {
+                print!("{}", placement_snippet(ui, store, &thread.anchor, &placement, at_commit)?);
+            }
         } else {
             if shown > 0 {
                 println!();
@@ -637,6 +641,9 @@ pub fn list(
                     println!("    {line}");
                 }
             }
+            if patch {
+                print!("{}", placement_snippet(ui, store, &thread.anchor, &placement, at_commit)?);
+            }
         }
         shown += 1;
     }
@@ -650,6 +657,35 @@ pub fn list(
 /// dim punctuation around already-colored parts.
 fn decorate(ui: Ui, parts: &[String]) -> String {
     format!("{}{}{}", ui.dim("("), parts.join(&ui.dim(", ")), ui.dim(")"))
+}
+
+/// The code snippet for a thread at `target`: from the re-anchored location
+/// when there is one, from the anchor's own blob when outdated (SPEC.md §4.2
+/// step 4). Empty for whole-change and whole-file anchors.
+fn placement_snippet(
+    ui: Ui,
+    store: &Store,
+    anchor: &Anchor,
+    placement: &Reanchor,
+    target: ObjectId,
+) -> Result<String> {
+    match placement {
+        Reanchor::Located { path, lines: Some(lines), .. } => {
+            match reanchor::blob_at(store.repo(), target, path)? {
+                Some(blob) => {
+                    Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob)?, *lines))
+                }
+                None => Ok(String::new()),
+            }
+        }
+        _ => match (anchor.lines, &anchor.blob) {
+            (Some(lines), Some(blob)) => {
+                let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
+                Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines))
+            }
+            _ => Ok(String::new()),
+        },
+    }
 }
 
 /// Sort out `list`'s lone positional: a change (commit or range) or a path
@@ -796,20 +832,7 @@ fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Resu
         }
     }
 
-    match &placement {
-        Reanchor::Located { path, lines: Some(lines), .. } => {
-            if let Some(blob) = reanchor::blob_at(store.repo(), target, path)? {
-                out.push_str(&render_snippet(ui, &reanchor::blob_content(store.repo(), blob)?, *lines));
-            }
-        }
-        _ => {
-            if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
-                let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
-                out.push_str(&render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines));
-            }
-        }
-    }
-
+    out.push_str(&placement_snippet(ui, store, anchor, &placement, target)?);
     out.push_str(&render_conversation(ui, thread, &folded));
     Ok(out)
 }

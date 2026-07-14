@@ -122,6 +122,9 @@ enum Command {
         /// One line per thread instead of the full block
         #[arg(long)]
         oneline: bool,
+        /// Show each thread's code snippet, as `git log -p` shows patches
+        #[arg(short, long)]
+        patch: bool,
     },
     /// Generate man pages into a directory (for packaging)
     #[command(hide = true)]
@@ -230,13 +233,13 @@ fn main() -> anyhow::Result<()> {
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
-        Command::List { target, file, at, open, resolved, oneline } => {
+        Command::List { target, file, at, open, resolved, oneline, patch } => {
             let state = match (open, resolved) {
                 (true, _) => Some(false),
                 (_, true) => Some(true),
                 _ => None,
             };
-            commands::list(&store, target.as_deref(), file.as_deref(), &at, state, oneline)
+            commands::list(&store, target.as_deref(), file.as_deref(), &at, state, oneline, patch)
         }
         Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }
