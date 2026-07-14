@@ -128,7 +128,7 @@ enum Command {
         /// One line per thread instead of the full block
         #[arg(long)]
         oneline: bool,
-        /// Show each thread's anchored change, as `git log -p` shows patches
+        /// Show each thread's anchored change: its hunks, or a diffstat for whole changes
         #[arg(short, long)]
         patch: bool,
         /// Show each thread's diffstat, as `git log --stat` does

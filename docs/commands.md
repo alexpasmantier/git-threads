@@ -204,11 +204,11 @@ message and draft counts when they say something), `Author:` / `Date:` / `Anchor
 a `Now:` field when the thread moved (`(relocated)` / `(fuzzy(f))` against `--at`, default
 `HEAD`), and the root comment indented below. `--oneline` compresses each thread to one
 line — ID, decorations, location, first line of the root — the way `git log --oneline`
-does. `-p` / `--patch` appends the change each thread discusses, the way `git log -p`
-appends patches: a diff clipped to the hunks overlapping the anchored lines, the whole
-patch for whole-change threads, and the annotated file excerpt when there is no diff to
-show (snapshot annotations). `--stat` appends the diffstat instead, like
-`git log --stat`. Both compose with `--oneline`.
+does. `-p` / `--patch` appends the change each thread discusses, kept bounded across many
+threads: the diff clipped to the hunks overlapping the anchored lines, a diffstat for
+whole-change and whole-file threads, and the annotated file excerpt when there is no diff
+to show (snapshot annotations). `--stat` appends the diffstat for every thread, like
+`git log --stat`. Both compose with `--oneline`; the full patch is `show -p`'s job.
 
 The rest of git log's narrowing vocabulary applies to the thread's root comment:
 `-n <num>` / `--max-count` stops after that many threads, `--author <who>` keeps threads

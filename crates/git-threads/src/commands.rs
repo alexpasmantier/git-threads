@@ -560,9 +560,12 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     let until = opts.until.as_deref().map(parse_date).transpose()?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
+    // list -p stays bounded (clipped hunks, diffstat for whole changes):
+    // across many threads a full patch each buries the list. show -p is the
+    // full-patch deep dive on one thread.
     let snippet_mode = match (opts.patch, opts.stat) {
         (_, true) => Some(SnippetMode::Stat),
-        (true, _) => Some(SnippetMode::Patch),
+        (true, _) => Some(SnippetMode::Auto),
         _ => None,
     };
     let ui = Ui::auto();
