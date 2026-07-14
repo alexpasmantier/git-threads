@@ -8,6 +8,7 @@ use git_threads_core::{
     fold_thread,
 };
 use gix::ObjectId;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -48,6 +49,11 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
             }
         }
         Err(err) => eprintln!("warning: initial fetch from {remote} failed: {err:#}"),
+    }
+    // First setup seeds the read mark: the history you just imported is not
+    // news. Re-running init must not touch an inbox already in use.
+    if !store.has_seen_mark()? {
+        store.mark_all_seen()?;
     }
     Ok(())
 }
@@ -527,6 +533,8 @@ pub struct ListOpts {
     pub stat: bool,
     /// Machine-readable output: one JSON array of thread objects.
     pub json: bool,
+    /// Only threads with events you haven't seen.
+    pub new: bool,
     /// git log's -n: stop after this many threads.
     pub max_count: Option<usize>,
     /// Substring of the root author's name or email, case-insensitive.
@@ -572,10 +580,16 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         (true, _) => Some(SnippetMode::Auto),
         _ => None,
     };
+    let seen = store.seen_event_ids()?;
+    let me = identity(repo).ok();
     let ui = Ui::auto();
     let mut shown = 0;
     let mut json_threads: Vec<serde_json::Value> = Vec::new();
     for thread in threads {
+        let unseen = unseen_ids(&thread, &seen, me.as_ref());
+        if opts.new && unseen.is_empty() {
+            continue;
+        }
         let folded = fold_thread(thread.events.clone());
         if opts.resolved.is_some_and(|want| folded.resolved != want) {
             continue;
@@ -621,7 +635,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         }
         let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
         if opts.json {
-            json_threads.push(thread_json(&thread, &folded, at_commit, &placement)?);
+            json_threads.push(thread_json(&thread, &folded, at_commit, &placement, &unseen)?);
             shown += 1;
             continue;
         }
@@ -636,6 +650,9 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         if !thread.drafts.is_empty() {
             let n = thread.drafts.len();
             deco.push(ui.yellow(format_args!("{n} draft{}", if n == 1 { "" } else { "s" })));
+        }
+        if !unseen.is_empty() {
+            deco.push(ui.cyan(format_args!("{} new", unseen.len())));
         }
         let decoration = decorate(ui, &deco);
         let location = match (&thread.anchor.path, &thread.anchor.lines) {
@@ -726,6 +743,26 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     Ok(())
 }
 
+/// A thread's published events the user hasn't looked at: absent from the
+/// seen snapshot, not their own writing, not their drafts. What "new" means
+/// everywhere it appears (decorations, --new, status, the json flag).
+fn unseen_ids(
+    thread: &ThreadRecord,
+    seen: &BTreeSet<EventId>,
+    me: Option<&Author>,
+) -> BTreeSet<EventId> {
+    thread
+        .events
+        .iter()
+        .filter(|(id, event)| {
+            !seen.contains(id)
+                && !thread.drafts.contains(id)
+                && me.is_none_or(|me| me.email != event.author.email)
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 /// One thread as `--json` emits it: the folded state plus the re-anchor
 /// placement against `at`. The `anchor` field is the anchor.json document
 /// (SPEC.md §3) verbatim; `body` is the current (folded) text, null when
@@ -735,6 +772,7 @@ fn thread_json(
     folded: &FoldedThread,
     at: ObjectId,
     placement: &Reanchor,
+    unseen: &BTreeSet<EventId>,
 ) -> Result<serde_json::Value> {
     use serde_json::json;
     let placement = match placement {
@@ -770,6 +808,7 @@ fn thread_json(
                 "edited": e.edited,
                 "retracted": e.retracted,
                 "draft": thread.drafts.contains(&e.id),
+                "new": unseen.contains(&e.id),
             })
         })
         .collect();
@@ -1047,19 +1086,40 @@ fn range_commits(
 pub fn show(store: &Store, prefix: &str, at: &str, mode: SnippetMode) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
     print!("{}", render_thread(Ui::auto(), store, &thread, at, mode)?);
+    // Reading a thread is what "seen" means; from here on it's not news.
+    store.mark_thread_seen(&thread.id)?;
     Ok(())
 }
 
-/// `show --json`: the same thread object `list --json` emits.
+/// `show --json`: the same thread object `list --json` emits. Unlike `show`,
+/// this does NOT mark the thread seen — a polling tool must not clear the
+/// user's inbox.
 pub fn show_json(store: &Store, prefix: &str, at: &str) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
     let folded = fold_thread(thread.events.clone());
     let at_commit = resolve_commit(store.repo(), at)?;
     let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
+    let unseen = unseen_ids(&thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
     println!(
         "{}",
-        serde_json::to_string_pretty(&thread_json(&thread, &folded, at_commit, &placement)?)?
+        serde_json::to_string_pretty(&thread_json(&thread, &folded, at_commit, &placement, &unseen)?)?
     );
+    Ok(())
+}
+
+/// Mark one thread — or everything — seen without opening it.
+pub fn seen(store: &Store, prefix: Option<&str>) -> Result<()> {
+    match prefix {
+        Some(prefix) => {
+            let (thread, _) = find_message(store, prefix)?;
+            store.mark_thread_seen(&thread.id)?;
+            println!("marked thread {} seen", Ui::auto().yellow(short(&thread.id)));
+        }
+        None => {
+            store.mark_all_seen()?;
+            println!("marked all threads seen");
+        }
+    }
     Ok(())
 }
 
@@ -1136,14 +1196,20 @@ fn render_thread(
         }
     }
 
+    let unseen = unseen_ids(thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
     out.push_str(&anchor_snippet(ui, store, anchor, mode)?);
-    out.push_str(&render_conversation(ui, thread, &folded));
+    out.push_str(&render_conversation(ui, thread, &folded, &unseen));
     Ok(out)
 }
 
 /// The conversation as `show` prints it: one block per message, blank-line
 /// separated, starting with a blank line.
-fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> String {
+fn render_conversation(
+    ui: Ui,
+    thread: &ThreadRecord,
+    folded: &FoldedThread,
+    unseen: &BTreeSet<EventId>,
+) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     for event in &folded.events {
@@ -1151,6 +1217,8 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
         let edited = if event.edited { format!(" {}", ui.dim("(edited)")) } else { String::new() };
         let draft = if thread.drafts.contains(&event.id) {
             format!(" {}", ui.yellow("(draft)"))
+        } else if unseen.contains(&event.id) {
+            format!(" {}", ui.cyan("(new)"))
         } else {
             String::new()
         };
@@ -1277,10 +1345,11 @@ fn render_snippet(ui: Ui, content: &str, lines: LineRange) -> String {
 /// addressing makes event sets directly comparable across refs.
 pub fn status(store: &Store) -> Result<()> {
     let ui = Ui::auto();
+    let threads = store.threads()?;
 
     let mut lines: Vec<String> = Vec::new();
     let mut draft_threads = 0usize;
-    for thread in store.threads()? {
+    for thread in &threads {
         if thread.drafts.is_empty() {
             continue;
         }
@@ -1349,6 +1418,18 @@ pub fn status(store: &Store) -> Result<()> {
                 ui.dim("(git threads push to share)")
             );
         }
+    }
+
+    let seen = store.seen_event_ids()?;
+    let me = identity(store.repo()).ok();
+    let with_news =
+        threads.iter().filter(|t| !unseen_ids(t, &seen, me.as_ref()).is_empty()).count();
+    if with_news > 0 {
+        println!(
+            "{with_news} thread{} with new activity {}",
+            if with_news == 1 { "" } else { "s" },
+            ui.dim("(git threads list --new)")
+        );
     }
     Ok(())
 }

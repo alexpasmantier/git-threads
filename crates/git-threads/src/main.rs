@@ -100,6 +100,11 @@ enum Command {
     },
     /// Show what's drafted and what hasn't been pushed
     Status,
+    /// Mark a thread seen without opening it — or everything, with no argument
+    Seen {
+        /// Thread ID or the ID of any message in it (or a unique prefix)
+        thread: Option<String>,
+    },
     /// Fetch and integrate threads data from a remote
     Pull {
         /// Remote to pull from
@@ -130,6 +135,9 @@ enum Command {
         /// Only resolved threads
         #[arg(long, conflicts_with = "open")]
         resolved: bool,
+        /// Only threads with messages you haven't seen yet
+        #[arg(long)]
+        new: bool,
         /// One line per thread instead of the full block
         #[arg(long)]
         oneline: bool,
@@ -273,6 +281,7 @@ fn main() -> anyhow::Result<()> {
             commands::show(&store, &thread, &at, mode)
         }
         Command::Status => commands::status(&store),
+        Command::Seen { thread } => commands::seen(&store, thread.as_deref()),
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
@@ -282,6 +291,7 @@ fn main() -> anyhow::Result<()> {
             at,
             open,
             resolved,
+            new,
             oneline,
             patch,
             stat,
@@ -304,6 +314,7 @@ fn main() -> anyhow::Result<()> {
                     file,
                     at,
                     resolved: state,
+                    new,
                     oneline,
                     patch,
                     stat,

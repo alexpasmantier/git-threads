@@ -16,6 +16,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | [`discard`](#git-threads-discard) | removes a drafted event before it's shared (`--all` for every draft) |
 | [`list`](#git-threads-list) | all threads — or one change's — with their re-anchor status against your current code |
 | [`show`](#git-threads-show) | one thread: its code context (re-anchored) and conversation |
+| [`seen`](#git-threads-seen) | marks a thread (or everything) seen without opening it |
 | [`status`](#git-threads-status) | what's drafted and what hasn't been pushed |
 | [`commit`](#git-threads-commit) | seals everything you've drafted into local history, as one batch |
 | [`push`](#git-threads-push) | shares your local discussion history (the fetch–union–push loop) |
@@ -174,7 +175,7 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 ### `git threads list`
 
 ```
-git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline]
+git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--new] [--oneline]
                  [-p | --stat | --json] [-n <num>] [--author <who>] [--grep <text>]
                  [--since <date>] [--until <date>]
 ```
@@ -188,6 +189,18 @@ question is one line:
 
 ```console
 $ git threads list main...topic --open      # what still needs attention on this branch?
+```
+
+Without a forge sending notifications, the inbox question — *what's new for me?* — is
+answered locally. Each clone keeps a **seen mark** (`refs/threads/seen`, local only, never
+shared): messages by others that arrived since you last looked show up as a `N new`
+decoration, and `--new` narrows the listing to exactly those threads. Reading a thread with
+`show` marks it seen; [`seen`](#git-threads-seen) does it in bulk. Your own messages are
+never news to you, and `init` seeds the mark so freshly imported history doesn't flood the
+inbox.
+
+```console
+$ git threads list --new                    # what did I miss?
 ```
 
 One difference from `comment`: a lone path filters across **all** changes — the archaeology
@@ -256,6 +269,20 @@ snapshot annotations show the annotated file excerpt. `-p` expands to the full p
 `--stat` forces the diffstat. `--json` emits the thread as one JSON object, the same shape
 as `list --json`'s elements.
 
+Messages you haven't read carry a `(new)` marker, and viewing the thread marks it seen —
+it drops out of `list --new`. `--json` deliberately does *not* mark anything seen: a
+polling tool must not clear your inbox (its output still carries the per-message `new`
+flag).
+
+### `git threads seen`
+
+```
+git threads seen [thread-or-message]
+```
+
+Marks one thread seen without opening it — or, with no argument, everything: inbox zero.
+The mark is per clone and never shared; there is no way (and no need) to un-see.
+
 ## Sharing
 
 The rhythm is git's own: `commit` records locally, `push` shares, `pull` receives.
@@ -267,8 +294,9 @@ git threads status
 ```
 
 Where you are in that cycle, the way `git status` answers it for the working tree: every
-drafted event (kind, ID, where it goes, the first line of what it says) and, per remote,
-how many sealed events haven't been pushed. All clean prints
+drafted event (kind, ID, where it goes, the first line of what it says), per remote how
+many sealed events haven't been pushed, and how many threads have activity you haven't
+seen (`git threads list --new` shows them). All clean prints
 `nothing drafted` / `up to date with origin`.
 
 ```console

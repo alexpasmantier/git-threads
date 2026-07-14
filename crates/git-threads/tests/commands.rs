@@ -424,11 +424,14 @@ fn json_output_carries_folded_state_and_placement() {
     assert_eq!(thread["placement"]["status"], "exact");
     let messages = thread["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0]["body"], "does b need a body?");
-    assert_eq!(messages[0]["draft"], true);
+    // Same-second events order by ID tie-break; locate by kind.
+    let root = messages.iter().find(|m| m["type"] == "comment").unwrap();
+    assert_eq!(root["body"], "does b need a body?");
+    assert_eq!(root["draft"], true);
     // Retraction folds into the output: flag set, body withheld.
-    assert_eq!(messages[1]["retracted"], true);
-    assert_eq!(messages[1]["body"], serde_json::Value::Null);
+    let reply = messages.iter().find(|m| m["type"] == "reply").unwrap();
+    assert_eq!(reply["retracted"], true);
+    assert_eq!(reply["body"], serde_json::Value::Null);
 
     // show --json emits the same object, and filters compose with list.
     let shown = run(&["show", &thread_id.as_str()[..8], "--json"]);

@@ -34,6 +34,11 @@ pub const DATA_REF: &str = "refs/threads/data";
 /// history parent, only anchored-commit retention pins. Never fetched or
 /// pushed (the configured refspec maps only `data`).
 pub const DRAFTS_REF: &str = "refs/threads/drafts";
+/// Local-only read mark (SPEC.md "client-local niceties"): a snapshot in the
+/// [`DATA_REF`] layout holding exactly the events this clone has seen. What's
+/// new is a tree difference, so marking is copying tree entries — no
+/// timestamps, no index.
+pub const SEEN_REF: &str = "refs/threads/seen";
 
 pub struct Store {
     repo: gix::Repository,
@@ -120,6 +125,55 @@ impl Store {
     /// Current tip of the local drafts ref, if any drafts exist.
     pub fn drafts_tip(&self) -> Result<Option<ObjectId>> {
         self.ref_tip(DRAFTS_REF)
+    }
+
+    /// IDs of every event this clone has seen. Empty until something is
+    /// marked seen (`show`, `seen`, or `init`'s initial mark).
+    pub fn seen_event_ids(&self) -> Result<BTreeSet<EventId>> {
+        match self.ref_tip(SEEN_REF)? {
+            Some(tip) => self.event_ids(tip),
+            None => Ok(BTreeSet::new()),
+        }
+    }
+
+    /// Whether a seen mark exists at all (used by `init` to seed one exactly
+    /// once — pre-existing history is not news).
+    pub fn has_seen_mark(&self) -> Result<bool> {
+        Ok(self.ref_tip(SEEN_REF)?.is_some())
+    }
+
+    /// Mark everything currently published as seen: point the seen ref at
+    /// the data tip (its tree is the snapshot wanted). No data, no mark.
+    pub fn mark_all_seen(&self) -> Result<()> {
+        let Some(tip) = self.tip()? else {
+            return Ok(());
+        };
+        self.repo
+            .reference(SEEN_REF, tip, PreviousValue::Any, "git-threads: seen")
+            .with_context(|| format!("failed to update {SEEN_REF}"))?;
+        Ok(())
+    }
+
+    /// Mark one thread seen: copy its published directory into the seen
+    /// snapshot. A draft-only thread has nothing published to see.
+    pub fn mark_thread_seen(&self, thread: &ThreadId) -> Result<()> {
+        let Some(data_tree) = self.ref_tree(DATA_REF)? else {
+            return Ok(());
+        };
+        let dir = thread_dir(thread);
+        let Some(entry) = data_tree.lookup_entry_by_path(&dir)? else {
+            return Ok(());
+        };
+        let seen_tip = self.ref_tip(SEEN_REF)?;
+        let base_tree_id = self.tree_id_of(seen_tip)?;
+        let mut editor = self.repo.edit_tree(base_tree_id)?;
+        editor.upsert(dir.as_str(), EntryKind::Tree, entry.object_id())?;
+        let new_tree = editor.write()?.detach();
+        if new_tree == base_tree_id {
+            return Ok(());
+        }
+        self.commit(SEEN_REF, "threads: seen", new_tree, Vec::new(), seen_tip)?;
+        Ok(())
     }
 
     /// All threads: the published snapshot with local drafts overlaid.

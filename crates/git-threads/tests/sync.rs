@@ -244,6 +244,55 @@ fn status_tracks_the_draft_commit_push_cycle() {
 }
 
 #[test]
+fn inbox_tracks_new_activity_across_clones() {
+    let (_root, alice, bob) = setup();
+    let alice_store = Store::open(&alice).unwrap();
+    let bob_store = Store::open(&bob).unwrap();
+
+    let run = |dir: &Path, args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    // History that predates bob's init is not news: init seeds the mark.
+    let first = comment(&alice_store, "pre-existing discussion");
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
+    commands::init(&bob_store, "origin").unwrap();
+    assert_eq!(run(&bob, &["list", "--new"]).trim(), "no threads");
+
+    // A reply and a fresh thread arrive; both are news to bob.
+    commands::reply(&alice_store, first.as_str(), "still relevant?").unwrap();
+    let second = comment(&alice_store, "another question");
+    commands::commit(&alice_store).unwrap();
+    commands::push(&alice_store, "origin").unwrap();
+    commands::pull(&bob_store, "origin").unwrap();
+    let news = run(&bob, &["list", "--new", "--oneline"]);
+    assert!(news.contains("1 new") && news.contains("another question"), "{news}");
+    let status = run(&bob, &["status"]);
+    assert!(status.contains("2 threads with new activity"), "{status}");
+
+    // show --json reports newness without consuming it; show does consume.
+    let json = run(&bob, &["show", first.as_str(), "--json"]);
+    assert!(json.contains("\"new\": true"), "{json}");
+    let shown = run(&bob, &["show", first.as_str()]);
+    assert!(shown.contains("(new)"), "{shown}");
+    let remaining = run(&bob, &["list", "--new", "--oneline"]);
+    assert!(!remaining.contains(&first.as_str()[..12]), "{remaining}");
+    assert!(remaining.contains(&second.as_str()[..12]), "{remaining}");
+
+    // `seen` clears the rest; bob's own writes were never news to him.
+    run(&bob, &["seen"]);
+    comment(&bob_store, "bob's own thread");
+    assert_eq!(run(&bob, &["list", "--new"]).trim(), "no threads");
+}
+
+#[test]
 fn pull_from_empty_remote_is_graceful() {
     let (_root, alice, _bob) = setup();
     let alice_store = Store::open(&alice).unwrap();
