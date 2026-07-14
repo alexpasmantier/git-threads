@@ -86,6 +86,9 @@ enum Command {
         /// Show the anchored change's diffstat, as `git log --stat` does
         #[arg(long, conflicts_with = "patch")]
         stat: bool,
+        /// Machine-readable output: one JSON object
+        #[arg(long, conflicts_with_all = ["patch", "stat"])]
+        json: bool,
     },
     /// Discard drafted events before they're published
     Discard {
@@ -136,6 +139,9 @@ enum Command {
         /// Show each thread's diffstat, as `git log --stat` does
         #[arg(long, conflicts_with = "patch")]
         stat: bool,
+        /// Machine-readable output: one JSON array of thread objects
+        #[arg(long, conflicts_with_all = ["oneline", "patch", "stat"])]
+        json: bool,
         /// Limit the number of threads shown
         #[arg(short = 'n', long = "max-count", value_name = "NUMBER")]
         max_count: Option<usize>,
@@ -255,7 +261,10 @@ fn main() -> anyhow::Result<()> {
             (Some(event), false) => commands::discard(&store, &event),
             _ => anyhow::bail!("pass a draft event ID, or --all"),
         },
-        Command::Show { thread, at, patch, stat } => {
+        Command::Show { thread, at, patch, stat, json } => {
+            if json {
+                return commands::show_json(&store, &thread, &at);
+            }
             let mode = match (patch, stat) {
                 (true, _) => commands::SnippetMode::Patch,
                 (_, true) => commands::SnippetMode::Stat,
@@ -276,6 +285,7 @@ fn main() -> anyhow::Result<()> {
             oneline,
             patch,
             stat,
+            json,
             max_count,
             author,
             grep,
@@ -297,6 +307,7 @@ fn main() -> anyhow::Result<()> {
                     oneline,
                     patch,
                     stat,
+                    json,
                     max_count,
                     author,
                     grep,

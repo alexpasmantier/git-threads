@@ -525,6 +525,8 @@ pub struct ListOpts {
     pub oneline: bool,
     pub patch: bool,
     pub stat: bool,
+    /// Machine-readable output: one JSON array of thread objects.
+    pub json: bool,
     /// git log's -n: stop after this many threads.
     pub max_count: Option<usize>,
     /// Substring of the root author's name or email, case-insensitive.
@@ -572,6 +574,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     };
     let ui = Ui::auto();
     let mut shown = 0;
+    let mut json_threads: Vec<serde_json::Value> = Vec::new();
     for thread in threads {
         let folded = fold_thread(thread.events.clone());
         if opts.resolved.is_some_and(|want| folded.resolved != want) {
@@ -614,6 +617,11 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
             break;
         }
         let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
+        if opts.json {
+            json_threads.push(thread_json(&thread, &folded, at_commit, &placement)?);
+            shown += 1;
+            continue;
+        }
         let mut deco =
             vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
         if matches!(placement, Reanchor::Outdated) {
@@ -707,10 +715,69 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         }
         shown += 1;
     }
-    if shown == 0 {
+    if opts.json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(json_threads))?);
+    } else if shown == 0 {
         println!("{}", ui.dim("no threads"));
     }
     Ok(())
+}
+
+/// One thread as `--json` emits it: the folded state plus the re-anchor
+/// placement against `at`. The `anchor` field is the anchor.json document
+/// (SPEC.md §3) verbatim; `body` is the current (folded) text, null when
+/// retracted.
+fn thread_json(
+    thread: &ThreadRecord,
+    folded: &FoldedThread,
+    at: ObjectId,
+    placement: &Reanchor,
+) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let placement = match placement {
+        Reanchor::WholeCommit => json!({ "kind": "whole-commit" }),
+        Reanchor::Outdated => json!({ "kind": "outdated" }),
+        Reanchor::Located { path, lines, status } => {
+            let (status, fuzz) = match status {
+                ReanchorStatus::Exact => ("exact", None),
+                ReanchorStatus::Relocated => ("relocated", None),
+                ReanchorStatus::Fuzzy(f) => ("fuzzy", Some(*f)),
+            };
+            let mut value = json!({ "kind": "located", "path": path, "status": status });
+            if let Some(lines) = lines {
+                value["lines"] = json!({ "start": lines.start, "end": lines.end });
+            }
+            if let Some(fuzz) = fuzz {
+                value["fuzz"] = json!(fuzz);
+            }
+            value
+        }
+    };
+    let messages: Vec<serde_json::Value> = folded
+        .events
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.id.as_str(),
+                "type": String::from(e.event.kind.clone()),
+                "author": { "name": e.event.author.name, "email": e.event.author.email },
+                "ts": e.event.ts.as_str(),
+                "body": if e.retracted { None } else { e.effective_body.as_deref() },
+                "in_reply_to": e.event.in_reply_to.as_ref().map(|id| id.as_str()),
+                "edited": e.edited,
+                "retracted": e.retracted,
+                "draft": thread.drafts.contains(&e.id),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "id": thread.id.as_str(),
+        "resolved": folded.resolved,
+        "anchor": serde_json::to_value(&thread.anchor)?,
+        "at": at.to_string(),
+        "placement": placement,
+        "messages": messages,
+    }))
 }
 
 /// A git-log-style decoration list — `(open, 2 messages, 1 draft)` — with
@@ -977,6 +1044,19 @@ fn range_commits(
 pub fn show(store: &Store, prefix: &str, at: &str, mode: SnippetMode) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
     print!("{}", render_thread(Ui::auto(), store, &thread, at, mode)?);
+    Ok(())
+}
+
+/// `show --json`: the same thread object `list --json` emits.
+pub fn show_json(store: &Store, prefix: &str, at: &str) -> Result<()> {
+    let (thread, _) = find_message(store, prefix)?;
+    let folded = fold_thread(thread.events.clone());
+    let at_commit = resolve_commit(store.repo(), at)?;
+    let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&thread_json(&thread, &folded, at_commit, &placement)?)?
+    );
     Ok(())
 }
 

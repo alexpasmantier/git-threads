@@ -390,6 +390,54 @@ fn list_grep_searches_folded_bodies() {
 }
 
 #[test]
+fn json_output_carries_folded_state_and_placement() {
+    let dir = setup_repo();
+    let path = dir.path();
+    let store = Store::open(path).unwrap();
+
+    let mut on_lines = opts("does b need a body?");
+    on_lines.file = Some("src/lib.rs:2".into());
+    let thread_id = commands::comment(&store, &on_lines).unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "wrong thread, sorry").unwrap();
+    commands::delete(&store, reply_id.as_str()).unwrap();
+
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).expect("valid JSON")
+    };
+
+    let listed = run(&["list", "--json"]);
+    let threads = listed.as_array().unwrap();
+    assert_eq!(threads.len(), 1);
+    let thread = &threads[0];
+    assert_eq!(thread["id"], thread_id.as_str());
+    assert_eq!(thread["resolved"], false);
+    assert_eq!(thread["anchor"]["kind"], "range");
+    assert_eq!(thread["anchor"]["lines"]["start"], 2);
+    // The anchored blob is HEAD's, so placement is an exact hit.
+    assert_eq!(thread["placement"]["kind"], "located");
+    assert_eq!(thread["placement"]["status"], "exact");
+    let messages = thread["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["body"], "does b need a body?");
+    assert_eq!(messages[0]["draft"], true);
+    // Retraction folds into the output: flag set, body withheld.
+    assert_eq!(messages[1]["retracted"], true);
+    assert_eq!(messages[1]["body"], serde_json::Value::Null);
+
+    // show --json emits the same object, and filters compose with list.
+    let shown = run(&["show", &thread_id.as_str()[..8], "--json"]);
+    assert_eq!(&shown, thread);
+    let none = run(&["list", "--json", "--resolved"]);
+    assert_eq!(none.as_array().unwrap().len(), 0);
+}
+
+#[test]
 fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

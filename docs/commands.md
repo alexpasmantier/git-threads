@@ -175,7 +175,7 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 
 ```
 git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline]
-                 [-p | --stat] [-n <num>] [--author <who>] [--grep <text>]
+                 [-p | --stat | --json] [-n <num>] [--author <who>] [--grep <text>]
                  [--since <date>] [--until <date>]
 ```
 
@@ -224,10 +224,25 @@ retracted messages don't match). That makes the knowledge base retrievable:
 $ git threads list --grep "sigpipe"          # where did we discuss that?
 ```
 
+`--json` swaps the rendered blocks for one JSON array — the interface for anything that
+isn't a person: editor plugins, agents, CI. Every filter composes with it. Each element
+carries the thread's `id`, `resolved` state, its `anchor` (the anchor.json document,
+SPEC.md §3, verbatim), the commit it was re-anchored `at`, the resulting `placement`
+(`{"kind": "whole-commit" | "located" | "outdated"}`, with `path`/`lines`/`status` and
+`fuzz` when located), and its `messages` — folded state, so each message has its current
+`body` (null when retracted) plus `edited`/`retracted`/`draft` flags. Raw events stay one
+`git show` away; this is the *interpreted* view — the fold and the ladder are exactly the
+parts a consumer shouldn't reimplement.
+
+```console
+$ git threads list main...topic --open --json | jq -e 'length == 0' >/dev/null \
+    || echo "unresolved threads on this branch"
+```
+
 ### `git threads show`
 
 ```
-git threads show <thread-or-message> [--at <commit>] [-p | --stat]
+git threads show <thread-or-message> [--at <commit>] [-p | --stat | --json]
 ```
 
 One thread in full: the anchor and its diff, where the thread lands on `--at` per the
@@ -238,7 +253,8 @@ conversation — each message with its ID, author, date, and `(edited)` / `(draf
 The change renders bounded by default: line anchors show the diff clipped to their hunks,
 whole-change and whole-file anchors show the diffstat (`git log --stat` style), and
 snapshot annotations show the annotated file excerpt. `-p` expands to the full patch;
-`--stat` forces the diffstat.
+`--stat` forces the diffstat. `--json` emits the thread as one JSON object, the same shape
+as `list --json`'s elements.
 
 ## Sharing
 
