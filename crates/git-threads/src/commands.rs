@@ -626,7 +626,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 .unwrap_or("");
             println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
             if opts.patch {
-                print!("{}", placement_snippet(ui, store, &thread.anchor, &placement, at_commit)?);
+                print!("{}", anchor_snippet(ui, store, &thread.anchor)?);
             }
         } else {
             if shown > 0 {
@@ -676,7 +676,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 }
             }
             if opts.patch {
-                print!("{}", placement_snippet(ui, store, &thread.anchor, &placement, at_commit)?);
+                print!("{}", anchor_snippet(ui, store, &thread.anchor)?);
             }
         }
         shown += 1;
@@ -732,33 +732,112 @@ fn parse_date(spec: &str) -> Result<jiff::Timestamp> {
     bail!("cannot parse date {spec:?} (try ISO like 2026-07-01, or \"2 weeks ago\")")
 }
 
-/// The code snippet for a thread at `target`: from the re-anchored location
-/// when there is one, from the anchor's own blob when outdated (SPEC.md §4.2
-/// step 4). Empty for whole-change and whole-file anchors.
-fn placement_snippet(
-    ui: Ui,
-    store: &Store,
-    anchor: &Anchor,
-    placement: &Reanchor,
-    target: ObjectId,
-) -> Result<String> {
-    match placement {
-        Reanchor::Located { path, lines: Some(lines), .. } => {
-            match reanchor::blob_at(store.repo(), target, path)? {
-                Some(blob) => {
-                    Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob)?, *lines))
-                }
-                None => Ok(String::new()),
-            }
+/// The context a thread is about. Comments target diffs, so this is the
+/// anchored change itself, rendered as git renders diffs. When there is no
+/// change to show — snapshot annotations (an empty diff), or anchors whose
+/// lines predate the diff-intersection rule — the annotated file stands in.
+fn anchor_snippet(ui: Ui, store: &Store, anchor: &Anchor) -> Result<String> {
+    if anchor.diff.base != anchor.diff.head {
+        let (base, head) = (anchor.diff.base.as_str(), anchor.diff.head.as_str());
+        let mut args = vec!["diff", base, head];
+        if let Some(path) = &anchor.path {
+            args.extend(["--", path]);
         }
-        _ => match (anchor.lines, &anchor.blob) {
-            (Some(lines), Some(blob)) => {
-                let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
-                Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines))
-            }
-            _ => Ok(String::new()),
-        },
+        let diff = git(store.repo().git_dir(), &args)?;
+        let side = anchor.side.unwrap_or(Side::New);
+        let rendered = render_diff(ui, &diff, side, anchor.lines, anchor.path.is_none());
+        if !rendered.is_empty() {
+            return Ok(rendered);
+        }
     }
+    if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
+        let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
+        return Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines));
+    }
+    Ok(String::new())
+}
+
+/// Render a unified diff the way git colors it, keeping only the hunks that
+/// overlap the anchored `lines` on `side` (all of them when `lines` is
+/// `None`) and marking the anchored lines in the gutter. File headers are
+/// shown only for whole-change diffs (`headers`), where they separate files.
+fn render_diff(
+    ui: Ui,
+    diff: &str,
+    side: Side,
+    lines: Option<LineRange>,
+    headers: bool,
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let (mut old_no, mut new_no) = (0u32, 0u32);
+    let mut in_hunk = false;
+    let mut wanted = false;
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            in_hunk = true;
+            let mut fields = line.split_whitespace().skip(1);
+            let span = |token: Option<&str>, sign: char| -> (u32, u32) {
+                let Some(token) = token.and_then(|t| t.strip_prefix(sign)) else { return (0, 0) };
+                match token.split_once(',') {
+                    Some((start, len)) => {
+                        (start.parse().unwrap_or(0), len.parse().unwrap_or(0))
+                    }
+                    None => (token.parse().unwrap_or(0), 1),
+                }
+            };
+            let old = span(fields.next(), '-');
+            let new = span(fields.next(), '+');
+            (old_no, new_no) = (old.0, new.0);
+            let (start, len) = match side {
+                Side::Old => old,
+                Side::New => new,
+            };
+            wanted = lines.is_none_or(|want| {
+                let end = start + len.max(1) - 1;
+                want.start <= end && want.end >= start
+            });
+            if wanted {
+                writeln!(out, "  {}", ui.cyan(line)).unwrap();
+            }
+            continue;
+        }
+        if !in_hunk || !line.starts_with(['+', '-', ' ', '\\']) {
+            in_hunk = false;
+            if headers {
+                writeln!(out, "  {}", ui.bold(line)).unwrap();
+            }
+            continue;
+        }
+        let on = |no: u32| lines.is_some_and(|l| l.start <= no && no <= l.end);
+        let (marked, rendered) = match line.as_bytes()[0] {
+            b'-' => {
+                let marked = side == Side::Old && on(old_no);
+                old_no += 1;
+                (marked, ui.red(line))
+            }
+            b'+' => {
+                let marked = side == Side::New && on(new_no);
+                new_no += 1;
+                (marked, ui.green(line))
+            }
+            b' ' => {
+                let marked = on(match side {
+                    Side::Old => old_no,
+                    Side::New => new_no,
+                });
+                old_no += 1;
+                new_no += 1;
+                (marked, ui.dim(line))
+            }
+            _ => (false, ui.dim(line)), // "\ No newline at end of file"
+        };
+        if wanted {
+            let mark = if marked { ui.cyan(">") } else { " ".to_string() };
+            writeln!(out, "{mark} {rendered}").unwrap();
+        }
+    }
+    if out.is_empty() { out } else { format!("\n{out}") }
 }
 
 /// Sort out `list`'s lone positional: a change (commit or range) or a path
@@ -895,17 +974,11 @@ fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Resu
             }
         }
         Reanchor::Outdated => {
-            writeln!(
-                out,
-                "Now:    {} at {target_short} {}",
-                ui.red("no match"),
-                ui.dim("— showing the anchor's own context")
-            )
-            .unwrap();
+            writeln!(out, "Now:    {} at {target_short}", ui.red("no match")).unwrap();
         }
     }
 
-    out.push_str(&placement_snippet(ui, store, anchor, &placement, target)?);
+    out.push_str(&anchor_snippet(ui, store, anchor)?);
     out.push_str(&render_conversation(ui, thread, &folded));
     Ok(out)
 }

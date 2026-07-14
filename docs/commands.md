@@ -204,8 +204,10 @@ message and draft counts when they say something), `Author:` / `Date:` / `Anchor
 a `Now:` field when the thread moved (`(relocated)` / `(fuzzy(f))` against `--at`, default
 `HEAD`), and the root comment indented below. `--oneline` compresses each thread to one
 line — ID, decorations, location, first line of the root — the way `git log --oneline`
-does. `-p` / `--patch` appends each thread's code snippet (re-anchored against `--at`),
-the way `git log -p` appends patches; it composes with `--oneline`.
+does. `-p` / `--patch` appends the change each thread discusses, the way `git log -p`
+appends patches: a diff clipped to the hunks overlapping the anchored lines, the whole
+patch for whole-change threads, and the annotated file excerpt when there is no diff to
+show (snapshot annotations). It composes with `--oneline`.
 
 The rest of git log's narrowing vocabulary applies to the thread's root comment:
 `-n <num>` / `--max-count` stops after that many threads, `--author <who>` keeps threads
@@ -220,9 +222,10 @@ git threads show <thread-or-message> [--at <commit>]
 ```
 
 One thread in full: the anchor and its diff, where the thread lands on `--at` per the
-re-anchoring ladder, the code snippet (from the re-anchored location, or from the original
-diff when outdated), and the folded conversation — each message with its ID, author,
-date, and `(edited)` / `(draft)` / `[retracted]` markers.
+re-anchoring ladder (the `Now:` line), the change being discussed rendered as a diff
+(clipped to the anchored lines; the annotated file excerpt when there is no diff to
+show), and the folded conversation — each message with its ID, author, date, and
+`(edited)` / `(draft)` / `[retracted]` markers.
 
 ## Sharing
 
