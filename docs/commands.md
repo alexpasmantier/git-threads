@@ -154,7 +154,7 @@ git threads move <thread-or-message> <file[:lines]> [--at <commit>]
 ```
 
 Re-pins a thread to where its code lives now — the way out of `outdated`. When the
-re-anchoring ladder can't follow the code (a file split, a rewrite beyond fuzz), a person
+re-anchoring algorithm can't follow the code (a file split, a rewrite beyond fuzz), a person
 can: `move` records a `move` event carrying a fresh anchor at `--at` (default `HEAD`), and
 from then on re-anchoring starts there. Works on any thread, not just outdated ones —
 including pinning a whole-change discussion down to the code it's really about.
@@ -165,7 +165,7 @@ fixed by another move — latest wins. Moved threads are findable under both the
 new paths in `list`.
 
 ```console
-$ git threads show a023381                  # (open, outdated) — the ladder gave up
+$ git threads show a023381                  # (open, outdated) — the algorithm gave up
 $ git threads move a023381 src/lib/list.rs:210-215
 drafted move of thread a023381188062 to src/lib/list.rs:210-215 (commit and push to share)
 ```
@@ -238,12 +238,15 @@ $ git threads list src/ --resolved          # settled questions under src/
 ```
 
 Threads print newest first as `git log`-style blocks: a `thread <id>` header with
-decorations (`open`/`resolved`, `outdated` when the anchor no longer matches at `--at`,
-message and draft counts when they say something), `Author:` / `Date:` / `Anchor:` fields,
-a `Now:` field when the thread moved (`(relocated)` / `(fuzzy(f))` against `--at`, default
-`HEAD`), and the root comment indented below. `--oneline` compresses each thread to one
-line — ID, decorations, location, first line of the root — the way `git log --oneline`
-does. `-p` / `--patch` appends the change each thread discusses, kept bounded across many
+decorations (`open`/`resolved`, `moved`, message and draft counts when they say
+something), `Author:` / `Date:` / `Anchor:` fields, and the root comment indented below.
+The `Anchor:` line answers the scanning reader's one question — *where is this thread in
+the code I'm looking at* (`--at`, default `HEAD`): an exact placement is just
+`path:lines`, an approximate one carries its status (`(relocated)`, `(fuzzy(f))`), and
+when nothing matches the original anchor stands, with its diff, marked `(outdated)`. The
+full original-versus-current story is [`show`](#git-threads-show)'s job. `--oneline`
+compresses each thread to one line — ID, decorations, location, first line of the root —
+the way `git log --oneline` does. `-p` / `--patch` appends the change each thread discusses, kept bounded across many
 threads: the diff clipped to the hunks overlapping the anchored lines, a diffstat for
 whole-change and whole-file threads, and the annotated file excerpt when there is no diff
 to show (snapshot annotations). `--stat` appends the diffstat for every thread, like
@@ -269,8 +272,8 @@ otherwise), the commit it was re-anchored `at`, the resulting `placement`
 (`{"kind": "whole-commit" | "located" | "outdated"}`, with `path`/`lines`/`status` and
 `fuzz` when located), and its `messages` — folded state, so each message has its current
 `body` (null when retracted) plus `edited`/`retracted`/`draft` flags. Raw events stay one
-`git show` away; this is the *interpreted* view — the fold and the ladder are exactly the
-parts a consumer shouldn't reimplement.
+`git show` away; this is the *interpreted* view — the fold and the re-anchoring algorithm
+are exactly the parts a consumer shouldn't reimplement.
 
 ```console
 $ git threads list main...topic --open --json | jq -e 'length == 0' >/dev/null \
@@ -283,10 +286,13 @@ $ git threads list main...topic --open --json | jq -e 'length == 0' >/dev/null \
 git threads show <thread-or-message> [--at <commit>] [-p | --stat | --json]
 ```
 
-One thread in full: the anchor and its diff, where the thread lands on `--at` per the
-re-anchoring ladder (the `Now:` line), the change being discussed, and the folded
+One thread in full: its location history, the change being discussed, and the folded
 conversation — each message with its ID, author, date, and `(edited)` / `(draft)` /
-`[retracted]` markers.
+`[retracted]` markers. The location history is one line per chapter, nothing suppressed:
+`Original:` (the anchor: path, lines, and the diff it was made against), `Moved:` (where
+and by whom, if the thread was ever [re-pinned](#git-threads-move)), and `Current:` —
+where the code sits at `--at` per the re-anchoring algorithm, with its status
+(`(exact)` through `(fuzzy(f))`), or `no match` when the thread is outdated.
 
 The change renders bounded by default: line anchors show the diff clipped to their hunks,
 whole-change and whole-file anchors show the diffstat (`git log --stat` style), and

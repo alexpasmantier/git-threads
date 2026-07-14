@@ -507,7 +507,7 @@ fn effective_anchor<'a>(thread: &'a ThreadRecord, folded: &'a FoldedThread) -> &
 
 /// Re-pin a thread to where its code lives now: an empty-diff anchor on
 /// `at`, recorded as a `move` event (SPEC.md §2.1). The escape hatch for
-/// outdated threads — when the ladder can't follow the code, a person can.
+/// outdated threads — when re-anchoring can't follow the code, a person can.
 pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Result<EventId> {
     let (thread, _) = find_message(store, prefix)?;
     let repo = store.repo();
@@ -712,9 +712,6 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         }
         let mut deco =
             vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
-        if matches!(placement, Reanchor::Outdated) {
-            deco.push(ui.red("outdated"));
-        }
         if folded.moved.is_some() {
             deco.push(ui.yellow("moved"));
         }
@@ -735,24 +732,45 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
             _ if opts.oneline => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
             _ => "whole change".to_string(),
         };
+        // One location for the scanning eye: where the thread is at --at.
+        // Approximate placements carry their status; when nothing matches,
+        // the original anchor stands, marked outdated. The full original vs
+        // current story is show's job.
+        let (place, on_diff, note) = match &placement {
+            Reanchor::WholeCommit => (location.clone(), true, String::new()),
+            Reanchor::Located { path, lines, status } => {
+                let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+                let note = match status {
+                    ReanchorStatus::Exact => String::new(),
+                    status => format!(" {}", ui.yellow(format_args!("({status})"))),
+                };
+                (format!("{path}{lines}"), false, note)
+            }
+            Reanchor::Outdated => {
+                (location.clone(), true, format!(" {}", ui.red("(outdated)")))
+            }
+        };
+        // Only lines that couldn't be re-located need their diff spelled out.
+        let diff = if on_diff {
+            format!(
+                " {}",
+                ui.dim(format_args!(
+                    "of {}..{}",
+                    &thread.anchor.diff.base.as_str()[..12],
+                    &thread.anchor.diff.head.as_str()[..12]
+                ))
+            )
+        } else {
+            String::new()
+        };
         if opts.oneline {
-            let drift = match &placement {
-                Reanchor::WholeCommit
-                | Reanchor::Located { status: ReanchorStatus::Exact, .. }
-                | Reanchor::Outdated => String::new(),
-                Reanchor::Located { path, lines, status } => {
-                    let lines =
-                        lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-                    ui.yellow(format_args!(" → {path}{lines} ({status})"))
-                }
-            };
             let title = root
                 .and_then(|r| r.effective_body.as_deref())
                 .unwrap_or("")
                 .lines()
                 .next()
                 .unwrap_or("");
-            println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
+            println!("{} {decoration} {place}{note}  {title}", ui.yellow(short(&thread.id)));
             if let Some(mode) = snippet_mode {
                 print!("{}", anchor_snippet(ui, store, effective, mode)?);
             }
@@ -769,29 +787,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 );
                 println!("Date:   {}", ui::date(&root.event.ts));
             }
-            println!(
-                "Anchor: {} {}",
-                ui.bold(&location),
-                ui.dim(format_args!(
-                    "of {}..{}",
-                    &thread.anchor.diff.base.as_str()[..12],
-                    &thread.anchor.diff.head.as_str()[..12]
-                ))
-            );
-            match &placement {
-                Reanchor::WholeCommit
-                | Reanchor::Located { status: ReanchorStatus::Exact, .. }
-                | Reanchor::Outdated => {}
-                Reanchor::Located { path, lines, status } => {
-                    let lines =
-                        lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-                    println!(
-                        "Now:    {} {}",
-                        ui.bold(format_args!("{path}{lines}")),
-                        ui.yellow(format_args!("({status})"))
-                    );
-                }
-            }
+            println!("Anchor: {}{diff}{note}", ui.bold(&place));
             let body = match root {
                 Some(root) if root.retracted => ui.dim("[retracted]"),
                 Some(root) => root.effective_body.clone().unwrap_or_default(),
@@ -1240,10 +1236,9 @@ fn render_thread(
     let target_short = &target.to_string()[..12];
     let placement = reanchor::reanchor(store, effective, target)?;
 
+    // Placement (outdated, drift) lives in the field lines below; the
+    // decorations carry thread state only.
     let mut deco = vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
-    if matches!(placement, Reanchor::Outdated) {
-        deco.push(ui.red("outdated"));
-    }
     if folded.moved.is_some() {
         deco.push(ui.yellow("moved"));
     }
@@ -1263,9 +1258,13 @@ fn render_thread(
         (Some(path), None) => path.clone(),
         _ => "whole change".to_string(),
     };
+    // The full story, one line per chapter: what the author anchored to,
+    // where a human re-pinned it (if anyone did), and where the code sits at
+    // --at. Unlike list's single current-first line, nothing is suppressed —
+    // an explicit exact `Current:` is the confirmation it's still there.
     writeln!(
         out,
-        "Anchor: {}{side} {}",
+        "Original: {}{side} {}",
         ui.bold(location),
         ui.dim(format_args!(
             "of {}..{}",
@@ -1283,7 +1282,7 @@ fn render_thread(
         };
         writeln!(
             out,
-            "Moved:  {} {}",
+            "Moved:    {} {}",
             ui.bold(location),
             ui.dim(format_args!(
                 "at {} by {}",
@@ -1297,23 +1296,19 @@ fn render_thread(
     match &placement {
         Reanchor::WholeCommit => {}
         Reanchor::Located { path, lines, status } => {
-            // Only news when the thread drifted: an exact hit at the
-            // effective anchor's own location goes without saying.
             let exact = matches!(status, ReanchorStatus::Exact);
-            if !exact || Some(path) != effective.path.as_ref() || *lines != effective.lines {
-                let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-                let status = format!("({status})");
-                let status = if exact { ui.green(status) } else { ui.yellow(status) };
-                writeln!(
-                    out,
-                    "Now:    {} at {target_short} {status}",
-                    ui.bold(format_args!("{path}{lines}"))
-                )
-                .unwrap();
-            }
+            let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+            let status = format!("({status})");
+            let status = if exact { ui.green(status) } else { ui.yellow(status) };
+            writeln!(
+                out,
+                "Current:  {} at {target_short} {status}",
+                ui.bold(format_args!("{path}{lines}"))
+            )
+            .unwrap();
         }
         Reanchor::Outdated => {
-            writeln!(out, "Now:    {} at {target_short}", ui.red("no match")).unwrap();
+            writeln!(out, "Current:  {} at {target_short}", ui.red("no match")).unwrap();
         }
     }
 

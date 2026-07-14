@@ -5,8 +5,8 @@ Code comments document code. Commit messages document diffs — but only as a wh
 ```text
 $ git threads show bebce03de90b
 thread bebce03de90bc053e93673edfce384fe1850da51 (resolved)
-Anchor: crates/git-threads/src/main.rs:94-94 of 1a5ef68157e9..73e0f8733413
-Now:    crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
+Original: crates/git-threads/src/main.rs:94-94 of 1a5ef68157e9..73e0f8733413
+Current:  crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
 
     143 │     }
     144 │ }

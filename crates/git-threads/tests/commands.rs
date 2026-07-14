@@ -451,7 +451,7 @@ fn move_repins_an_outdated_thread() {
     let thread_id = commands::comment(&store, &on_lines).unwrap();
     store.commit_drafts().unwrap().unwrap();
 
-    // The code moves beyond what the ladder can follow: the file vanishes
+    // The code moves beyond what the algorithm can follow: the file vanishes
     // and its replacement shares nothing with it.
     fs::remove_file(path.join("src/lib.rs")).unwrap();
     fs::write(path.join("src/core.rs"), "// a fresh start\nfn brand_new() {}\n").unwrap();
@@ -467,7 +467,7 @@ fn move_repins_an_outdated_thread() {
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         String::from_utf8_lossy(&output.stdout).into_owned()
     };
-    assert!(run(&["show", thread_id.as_str()]).contains("outdated"));
+    assert!(run(&["show", thread_id.as_str()]).contains("no match"));
 
     // A location that doesn't exist is rejected; a real one re-pins.
     let err =
@@ -476,8 +476,10 @@ fn move_repins_an_outdated_thread() {
     commands::move_thread(&store, &thread_id.as_str()[..8], "src/core.rs:2", "HEAD").unwrap();
 
     let shown = run(&["show", thread_id.as_str()]);
-    assert!(shown.contains("moved") && !shown.contains("outdated"), "{shown}");
-    assert!(shown.contains("Moved:  src/core.rs:2-2"), "{shown}");
+    assert!(shown.contains("moved") && !shown.contains("no match"), "{shown}");
+    assert!(shown.contains("Moved:    src/core.rs:2-2"), "{shown}");
+    assert!(shown.contains("Original: src/lib.rs:2-2"), "{shown}");
+    assert!(shown.contains("Current:  src/core.rs:2-2"), "{shown}");
 
     // Findable under both addresses: where it was, and where it is.
     assert!(run(&["list", "src/lib.rs", "--oneline"]).contains(&thread_id.as_str()[..12]));
