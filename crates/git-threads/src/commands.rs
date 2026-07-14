@@ -213,7 +213,7 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
         extra: Default::default(),
     };
     let root = new_event(repo, EventKind::Comment, |e| {
-        e.body = Some(opts.message.clone());
+        e.body = Some(wrap_message(&opts.message));
     })?;
     let thread_id = root.id()?;
 
@@ -398,7 +398,7 @@ fn resolve_diff(repo: &gix::Repository, spec: &str) -> Result<(ObjectId, ObjectI
 pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
     let (thread, target) = find_message(store, prefix)?;
     let event = new_event(store.repo(), EventKind::Reply, |e| {
-        e.body = Some(message.to_string());
+        e.body = Some(wrap_message(message));
         e.in_reply_to = Some(target.id.clone());
     })?;
     let event_id = event.id()?;
@@ -421,7 +421,7 @@ pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
 pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId> {
     let (thread, target) = find_editable(store, event_prefix)?;
     let event = new_event(store.repo(), EventKind::Edit, |e| {
-        e.body = Some(message.to_string());
+        e.body = Some(wrap_message(message));
         e.supersedes = Some(target.chain_tip.clone());
     })?;
     let event_id = event.id()?;
@@ -1122,6 +1122,34 @@ fn parse_lines(spec: &str) -> Result<LineRange> {
     Ok(LineRange { start: parse(start)?, end: parse(end)? })
 }
 
+/// Hard-wrap a new message to the 72-column convention git messages follow,
+/// once, at write time — stored text is displayed verbatim. Only unindented
+/// prose is re-flowed: indented lines are deliberate formatting (code,
+/// tables, quotes) and pass through untouched, as do words longer than the
+/// width (URLs).
+fn wrap_message(text: &str) -> String {
+    const WIDTH: usize = 72;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.chars().count() <= WIDTH || line.starts_with([' ', '\t']) {
+            out.push(line.to_string());
+            continue;
+        }
+        let mut current = String::new();
+        for word in line.split_whitespace() {
+            if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > WIDTH {
+                out.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+        out.push(current);
+    }
+    out.join("\n")
+}
+
 /// Find a comment or reply by event-ID prefix across all threads, returning
 /// its thread and its folded state (chain tip, retraction).
 fn find_message(store: &Store, prefix: &str) -> Result<(ThreadRecord, FoldedEvent)> {
@@ -1163,4 +1191,22 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_message;
+
+    #[test]
+    fn wrap_message_reflows_prose_and_keeps_formatting() {
+        let long = "word ".repeat(20); // 99 chars, prose
+        let wrapped = wrap_message(long.trim_end());
+        assert!(wrapped.lines().count() == 2 && wrapped.lines().all(|l| l.len() <= 72));
+
+        let formatted = format!("    {}", "x".repeat(80)); // indented: verbatim
+        assert_eq!(wrap_message(&formatted), formatted);
+
+        let url = "x".repeat(80); // one long word: verbatim
+        assert_eq!(wrap_message(&url), url);
+    }
 }
