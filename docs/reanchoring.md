@@ -3,7 +3,7 @@
 How a thread pinned to code that has since moved, changed, or vanished finds its place in the
 version you're looking at. Spec: [SPEC.md](../SPEC.md) §4. Code: the pure matching in
 [`crates/git-threads-core/src/reanchor.rs`](../crates/git-threads-core/src/reanchor.rs) and
-[`snippet.rs`](../crates/git-threads-core/src/snippet.rs); the git-facing rungs in
+[`snippet.rs`](../crates/git-threads-core/src/snippet.rs); the git-facing steps in
 [`crates/git-threads/src/reanchor.rs`](../crates/git-threads/src/reanchor.rs).
 
 ## Framing: anchors are facts, positions are views
@@ -28,31 +28,31 @@ The parameters (3 / 20 / 10+10) are normative, not tunable — two implementatio
 the same snippet or they'd disagree about matches. Exporters also materialize snippets at the
 boundary, so consumers without git object access (static HTML, email) can render context.
 
-## The ladder
+## The algorithm
 
-Evaluated strictly in order; first success wins. At every rung a match must be **unique** —
-two candidate positions is failure of that rung, never pick-first.
+Evaluated strictly in order; first success wins. At every step a match must be **unique** —
+two candidate positions is failure of that step, never pick-first.
 
-### Rung 1 — blob identity → `exact`
+### Step 1 — blob identity → `exact`
 
 If the anchored blob itself (same content hash) sits in `T`'s tree at the anchored path — or
 at a rename-detected path — the file version the comment was made on is present verbatim.
 Lines map 1:1; nothing to search. This is a tree lookup, no content comparison at all, and it
 covers the overwhelmingly common case (the file didn't change, or only *other* files did).
 
-Candidate paths throughout the ladder are the anchored path plus rename-detected successors
+Candidate paths throughout the algorithm are the anchored path plus rename-detected successors
 (`git diff -M` between the anchor's `head` and `T`). Rename detection is best-effort: if the
 diff can't run, the candidate list just shrinks to the anchored path. Cross-file content
 search is explicitly out of scope for v1 (high false-positive risk; a possible interactive
 client extension).
 
-### Rung 2 — verbatim snippet → `relocated`
+### Step 2 — verbatim snippet → `relocated`
 
 Search each candidate file for `before + target + after`, byte-exact. A unique hit means the
 code moved but didn't change (lines inserted above, file reshuffled). New line numbers are
 reported; the position of the target inside the matched pattern gives the mapping.
 
-### Rung 3 — fuzzed match → `fuzzy(f)`
+### Step 3 — fuzzed match → `fuzzy(f)`
 
 Two relaxations, tried in order:
 
@@ -65,7 +65,7 @@ Two relaxations, tried in order:
 Any success here is `fuzzy(f)` — including whitespace-insensitive level 0, which is
 deliberately *not* `relocated`: `relocated` promises verbatim.
 
-### Rung 4 — `outdated`
+### Step 4 — `outdated`
 
 No unique match anywhere: the discussed code is genuinely gone or changed beyond recognition.
 The thread renders against its own `diff.head` using the derived snippet — always possible,
@@ -73,14 +73,14 @@ because [retention parents](storage.md#retention-parents-discussed-commits-cant-
 guarantee the original objects exist. An outdated thread is never lost; it's labeled history.
 
 It doesn't have to stay that way: `git threads move` re-pins the thread by hand (a `move`
-event carrying a fresh anchor, SPEC.md §2.4 rule 5), and the ladder starts from the new
+event carrying a fresh anchor, SPEC.md §2.4 rule 5), and the algorithm starts from the new
 anchor on every later lookup. Human judgment supplies what content matching couldn't —
 across file splits, rewrites, renames-with-changes — and the moved thread ages gracefully
 again, because the new anchor re-anchors like any other.
 
 ### Kind-specific rules
 
-The ladder as described applies to `range` anchors. `commit` anchors are never re-anchored —
+The algorithm as described applies to `range` anchors. `commit` anchors are never re-anchored —
 they describe a whole change, which exists only in its own diff. `file` anchors use presence,
 not content: identical blob → `exact`; candidate path present with different content →
 `relocated`; otherwise `outdated`.
@@ -90,17 +90,17 @@ not content: identical blob → `exact`; candidate path present with different c
 **Ambiguity short-circuits.** Raising the fuzz level only ever *relaxes* the needle (drops
 constraint lines), so every position matching at level `f` still matches at `f + 1`. Two
 matches at any level therefore means two matches at every later level — the search can stop at
-the first ambiguous rung instead of grinding through the rest. (Also why ambiguity can't be
+the first ambiguous step instead of grinding through the rest. (Also why ambiguity can't be
 "resolved" by fuzzing harder.)
 
 **Truncated needles verify the hash.** A >20-line target's middle is unconstrained by line
 matching — the needle only pins head, tail, and the gap length. In byte-exact mode the stored
 SHA-256 of the full range must confirm the candidate's middle; a middle that changed fails
-rung 2 honestly. The whitespace-insensitive pass *cannot* verify the hash (trimmed lines hash
+step 2 honestly. The whitespace-insensitive pass *cannot* verify the hash (trimmed lines hash
 differently), which is the second reason its results are capped at `fuzzy`.
 
-**The pure/git split.** Rungs 2–3 are pure string matching (`locate_snippet(snippet, content)`
-in the core crate — no I/O, no git, property-tested in isolation, WASM-friendly). Rung 1,
+**The pure/git split.** Steps 2–3 are pure string matching (`locate_snippet(snippet, content)`
+in the core crate — no I/O, no git, property-tested in isolation, WASM-friendly). Step 1,
 candidate discovery, and blob loading are the CLI crate's thin git-facing wrapper. The spec's
 determinism requirement falls out of the purity.
 
@@ -110,7 +110,7 @@ same policy as search indexes.
 
 ## Observed behavior in this repository
 
-The repo's own threads exercise every rung on real history:
+The repo's own threads exercise every step on real history:
 
 - **`exact`, backwards in time**: the thread on the old fetch-refspec bug, re-anchored *onto
   its original commit* (`show <id> --at <old-head>`) — a commit that survives only through

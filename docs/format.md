@@ -48,7 +48,7 @@ Readers MUST ignore unknown fields and MUST preserve them (and events of unknown
 re-serializing. In the implementation this is a `#[serde(flatten)] extra` map on `Event` and
 `Anchor`, and `Other(String)` variants on `EventKind` / `AnchorKind` — an event of type
 `"reaction"` written by a future tool survives a round-trip through today's tool byte-for-byte.
-`v` only bumps on semantic changes (fold rules, ladder, canonicalization); additive fields and
+`v` only bumps on semantic changes (fold rules, algorithm, canonicalization); additive fields and
 new event types don't bump it.
 
 ## Canonical JSON and content-addressed IDs

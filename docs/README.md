@@ -18,7 +18,7 @@ into the spec and code:
   ref and session batching, retention parents, why bodies are inline, scaling.
 - **[Synchronization](sync.md)** — the refspec design, the commit/push split and the publish
   loop, the conflict-free union merge, hosting behavior.
-- **[Re-anchoring](reanchoring.md)** — snippets, the four-rung ladder, fuzz semantics,
+- **[Re-anchoring](reanchoring.md)** — snippets, the four-step algorithm, fuzz semantics,
   ambiguity rules, and its behavior on this repo's own history.
 
 The normative rules live in [SPEC.md](../SPEC.md); these documents explain and motivate them.

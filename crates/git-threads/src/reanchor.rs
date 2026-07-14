@@ -1,4 +1,4 @@
-//! Re-anchoring ladder (SPEC.md §4.2), git-facing half: candidate discovery
+//! Re-anchoring algorithm (SPEC.md §4.2), git-facing half: candidate discovery
 //! (anchored path, then rename detection between the anchor's head and the
 //! target) and step 1 blob identity. The content matching (steps 2–3) is
 //! core's `locate_snippet`.

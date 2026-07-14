@@ -10,10 +10,10 @@
 //! - §3 anchors → [`anchor`]
 //! - §6 canonical JSON → [`canonical`]
 //! - §4.1 snippet derivation → [`snippet`]
-//! - §4.2 re-anchoring ladder (content-matching steps) → [`reanchor`]
+//! - §4.2 re-anchoring algorithm (content-matching steps) → [`reanchor`]
 //!
 //! Storage (§5) and synchronization (§7) are git-facing and live in the CLI
-//! crate, not here — as are the git-facing rungs of the re-anchoring ladder
+//! crate, not here — as are the git-facing steps of the re-anchoring algorithm
 //! (blob identity, rename detection).
 
 pub mod anchor;

@@ -234,8 +234,8 @@ original commits survive solely because the threads ref holds on to them.
 
 The anchor never changes, but the code does. When you view a thread today, git-threads
 computes — fresh, every time — where the thread belongs in the version of the code you're
-looking at. The computation tries a ladder of strategies, strictest first, and reports
-honestly which rung matched:
+looking at. The computation tries a sequence of strategies, strictest first, and reports
+honestly which step matched:
 
 ```mermaid
 flowchart TD
@@ -252,9 +252,9 @@ The **snippet** is the search needle: the commented lines plus three lines of co
 side, taken from the exact file version recorded in the anchor. Very long ranges are matched
 by their first and last lines plus a fingerprint of the middle.
 
-Two rules keep the ladder trustworthy:
+Two rules keep the algorithm trustworthy:
 
-- **A match must be unique.** If the snippet appears in two places, that rung fails — the tool
+- **A match must be unique.** If the snippet appears in two places, that step fails — the tool
   never guesses which one you meant.
 - **Failure is honest.** If the code the thread discussed is really gone, the thread shows as
   `outdated` and renders the original code it was written against (which is always available —

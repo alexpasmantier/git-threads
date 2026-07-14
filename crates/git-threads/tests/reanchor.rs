@@ -1,4 +1,4 @@
-//! Integration tests for the full re-anchoring ladder (SPEC.md §4.2) against
+//! Integration tests for the full re-anchoring algorithm (SPEC.md §4.2) against
 //! a real repository: blob identity, snippet relocation, fuzz, rename
 //! detection, and the outdated fallback.
 

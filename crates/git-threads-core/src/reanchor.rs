@@ -1,4 +1,4 @@
-//! Re-anchoring (SPEC.md §4.2) — the pure half of the ladder.
+//! Re-anchoring (SPEC.md §4.2) — the pure half of the algorithm.
 //!
 //! Step 1 (blob identity) and candidate discovery (rename detection) need
 //! git object access and live in the CLI crate. This module implements the
@@ -10,11 +10,11 @@ use crate::snippet::{Snippet, SnippetTarget};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-/// Ladder levels drop up to this many outer context lines per side (§4.2
+/// Fuzz levels drop up to this many outer context lines per side (§4.2
 /// step 3, `git apply` fuzz semantics).
 pub const MAX_FUZZ: usize = 3;
 
-/// Where the ladder stopped (SPEC.md §4.2). Step 4 (outdated) is the absence
+/// Where the algorithm stopped (SPEC.md §4.2). Step 4 (outdated) is the absence
 /// of a match, represented by the caller, not a status here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReanchorStatus {

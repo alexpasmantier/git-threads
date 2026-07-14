@@ -106,13 +106,13 @@ Anchors are always valid against their own `diff` — they never "break." Displa
 
 ## 4. Re-anchoring (normative)
 
-Purpose: given an anchor `A` and a target commit `T` (e.g. current branch tip), decide where — if anywhere — to display the thread. For a thread, `A` is its **effective anchor** (§2.4 rule 5): a `move` event replaces the starting point of the ladder, it never changes the ladder itself.
+Purpose: given an anchor `A` and a target commit `T` (e.g. current branch tip), decide where — if anywhere — to display the thread. For a thread, `A` is its **effective anchor** (§2.4 rule 5): a `move` event replaces the starting point of the algorithm, it never changes the algorithm itself.
 
 ### 4.1 The snippet (derived, never stored)
 
 `snippet(A)` = from blob `A.blob`: the `lines` range (**target**), plus 3 lines of context **before** and **after** (fewer at file boundaries). For ranges longer than 20 lines, target = first 10 + last 10 lines, plus SHA-256 of the full range. Exporters materialize snippets at the boundary for consumers without git object access (§8).
 
-### 4.2 The ladder
+### 4.2 The algorithm
 
 Evaluate in order; stop at the first success. At every step, a match MUST be **unique** among candidates — two matches means failure of that step, never pick-first.
 
@@ -123,7 +123,7 @@ Evaluate in order; stop at the first success. At every step, a match MUST be **u
 
 Candidate files in v1 are limited to `A.path` plus rename-detected paths. Cross-file search is an explicitly non-normative client extension (§ideas).
 
-The ladder as written applies to `range` anchors. `commit` anchors are never re-anchored — they describe a whole change, which exists only in its own diff. `file` anchors use presence, not content: identical blob at a candidate path → `exact`; a candidate path present with different content → `relocated`; otherwise `outdated`.
+The algorithm as written applies to `range` anchors. `commit` anchors are never re-anchored — they describe a whole change, which exists only in its own diff. `file` anchors use presence, not content: identical blob at a candidate path → `exact`; a candidate path present with different content → `relocated`; otherwise `outdated`.
 
 Two consequences implementations may rely on: raising the fuzz level only relaxes the pattern, so ambiguity at one level implies ambiguity at every later level — the search may stop at the first ambiguous level. And a truncated snippet's middle is unconstrained by line matching, so a byte-exact match MUST be confirmed against the stored range hash; the whitespace-insensitive pass cannot be, which is one reason its results are `fuzzy(f)`, never `relocated`.
 
@@ -216,7 +216,7 @@ Back-of-envelope for a 500k-line repo, 50 contributors, ~5,000 reviews/year (~12
 ## 10. Versioning
 
 - Every document carries `"v"`. Readers MUST accept documents with unknown fields and SHOULD surface (not crash on) unknown major versions.
-- Additive changes (new optional fields, new event types) do not bump `v`. Semantic changes to the fold, the ladder, or canonical serialization do.
+- Additive changes (new optional fields, new event types) do not bump `v`. Semantic changes to the fold, the algorithm, or canonical serialization do.
 
 ---
 

@@ -1,7 +1,7 @@
 //! Snippet derivation (SPEC.md §4.1).
 //!
 //! Snippets are derived, never stored: a pure function of a file's content
-//! and an anchor's line range. They are what the re-anchoring ladder (§4.2)
+//! and an anchor's line range. They are what the re-anchoring algorithm (§4.2)
 //! searches for, and what exporters materialize for consumers without git
 //! object access — so the parameters here are normative, not tunable.
 
