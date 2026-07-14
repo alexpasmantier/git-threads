@@ -65,6 +65,16 @@ enum Command {
         /// Event ID (or unique prefix) of the comment or reply, as shown by `show`
         event: String,
     },
+    /// Re-pin a thread to where its code lives now (for outdated threads)
+    Move {
+        /// Thread ID or the ID of any message in it (or a unique prefix)
+        thread: String,
+        /// New location: a file at the pin commit, optionally with lines (src/lib.rs:120-128)
+        file: String,
+        /// Commit to pin at
+        #[arg(long, default_value = "HEAD")]
+        at: String,
+    },
     /// Mark a thread resolved
     Resolve {
         /// Thread ID or the ID of any message in it (or a unique prefix)
@@ -261,6 +271,10 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Delete { event } => {
             commands::delete(&store, &event)?;
+            Ok(())
+        }
+        Command::Move { thread, file, at } => {
+            commands::move_thread(&store, &thread, &file, &at)?;
             Ok(())
         }
         Command::Resolve { thread, reopen } => commands::resolve(&store, &thread, !reopen),

@@ -35,6 +35,7 @@ A specification for storing anchored discussions — threaded comments on commit
 | `edit` | `body`, `supersedes` | Replaces the body of a prior `comment`/`reply`/`edit` by the same author |
 | `resolve` | `resolved` (bool) | Toggles thread resolution state |
 | `delete` | `supersedes` | Tombstone: marks a prior event as retracted (content remains in history) |
+| `move` | `anchor` | Re-pins the thread: re-anchoring starts from this anchor instead of the thread's own (§2.4 rule 5). The carried anchor SHOULD be an empty diff (`base == head`) at the commit the mover consulted — a statement of where the code is, not of a change |
 
 Readers MUST ignore unknown fields and MUST preserve (not drop) events of unknown type when re-serializing.
 
@@ -71,6 +72,7 @@ Given a thread's event set:
 2. **Resolved state** = the `resolved` value of the latest `resolve` event by (`ts`, event ID). Default: unresolved.
 3. **Display order** of a thread = events ordered by (`ts`, event ID), rendered flat.
 4. Events whose `in_reply_to`/`supersedes` target is absent are still valid (the target may arrive later); render them at the thread level.
+5. **Effective anchor** = the `anchor` carried by the latest `move` event, ordered by (`ts`, event ID); default the thread's own `anchor.json`. Re-anchoring (§4) starts from the effective anchor. The thread's `anchor.json` stays immutable — it records what was discussed; a `move` records where that code lives now.
 
 ## 3. Anchors
 
@@ -104,7 +106,7 @@ Anchors are always valid against their own `diff` — they never "break." Displa
 
 ## 4. Re-anchoring (normative)
 
-Purpose: given an anchor `A` and a target commit `T` (e.g. current branch tip), decide where — if anywhere — to display the thread.
+Purpose: given an anchor `A` and a target commit `T` (e.g. current branch tip), decide where — if anywhere — to display the thread. For a thread, `A` is its **effective anchor** (§2.4 rule 5): a `move` event replaces the starting point of the ladder, it never changes the ladder itself.
 
 ### 4.1 The snippet (derived, never stored)
 
@@ -146,7 +148,7 @@ threads/<shard>/<thread-id>/
 ### 5.2 Commits on the threads ref
 
 - A publish operation (e.g. one review session: N comments) SHOULD be batched into **one commit** carrying all its event files.
-- **Anchored-commit retention:** for each distinct `diff.head` referenced by newly added anchors, the publish commit MUST list that commit as an **additional parent**. Reachability from `refs/threads/data` then keeps discussed commits alive in every clone that fetches threads — surviving branch deletion, squash merges, and server GC. (`diff.base` needs no parent: it is an ancestor of `head` in both the commit-diff and merge-base cases.)
+- **Anchored-commit retention:** for each distinct `diff.head` referenced by newly added anchors — thread anchors and anchors carried by `move` events alike — the publish commit MUST list that commit as an **additional parent**. Reachability from `refs/threads/data` then keeps discussed commits alive in every clone that fetches threads — surviving branch deletion, squash merges, and server GC. (`diff.base` needs no parent: it is an ancestor of `head` in both the commit-diff and merge-base cases.)
 - Commit messages are informative only; suggested: `threads: <n> events in <m> threads`.
 - History on this ref is append-only. Writers MUST NOT force-push it.
 
@@ -239,7 +241,7 @@ Storage & scale
 
 Tooling
 
-- **CLI** — the single-player wedge. The reference implementation covers `comment|reply|edit|delete|resolve|discard|show|list|pull|commit|push|init`; `search`, `export`, and `import` remain.
+- **CLI** — the single-player wedge. The reference implementation covers `comment|reply|edit|delete|resolve|move|discard|show|list|status|seen|pull|commit|push|init` (search via `list --grep`, machine output via `--json`); `export` and `import` remain.
 - **GitHub/GitLab importers** ("liberate your review history"), then bidirectional PR sync.
 - **Static HTML export** of a discussion for repo-less readers.
 - **Desktop review client**: syntax highlighting, LSP navigation, search — the niceties web review UIs lack.

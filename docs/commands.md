@@ -12,6 +12,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | [`reply`](#git-threads-reply) | replies to a thread, or to a specific message in one |
 | [`edit`](#git-threads-edit) | replaces the text of one of your messages (appends an edit event) |
 | [`delete`](#git-threads-delete) | retracts one of your messages (appends a tombstone) |
+| [`move`](#git-threads-move) | re-pins a thread to where its code lives now |
 | [`resolve`](#git-threads-resolve) | resolves a thread (`--reopen` to reopen) |
 | [`discard`](#git-threads-discard) | removes a drafted event before it's shared (`--all` for every draft) |
 | [`list`](#git-threads-list) | all threads — or one change's — with their re-anchor status against your current code |
@@ -146,6 +147,29 @@ Retracts one of **your** comments or replies with a tombstone. The text remains 
 history (append-only, greppable) but renders as `[retracted]`. A tombstone is final: it wins
 over any edit, regardless of timestamps. Same-author rule as `edit`.
 
+### `git threads move`
+
+```
+git threads move <thread-or-message> <file[:lines]> [--at <commit>]
+```
+
+Re-pins a thread to where its code lives now — the way out of `outdated`. When the
+re-anchoring ladder can't follow the code (a file split, a rewrite beyond fuzz), a person
+can: `move` records a `move` event carrying a fresh anchor at `--at` (default `HEAD`), and
+from then on re-anchoring starts there. Works on any thread, not just outdated ones —
+including pinning a whole-change discussion down to the code it's really about.
+
+The original anchor is untouched: it remains the record of what was discussed, and `show`
+keeps printing it, with a `Moved:` line (and a `moved` decoration) on top. A wrong move is
+fixed by another move — latest wins. Moved threads are findable under both their old and
+new paths in `list`.
+
+```console
+$ git threads show a023381                  # (open, outdated) — the ladder gave up
+$ git threads move a023381 src/lib/list.rs:210-215
+drafted move of thread a023381188062 to src/lib/list.rs:210-215 (commit and push to share)
+```
+
 ### `git threads resolve`
 
 ```
@@ -240,7 +264,8 @@ $ git threads list --grep "sigpipe"          # where did we discuss that?
 `--json` swaps the rendered blocks for one JSON array — the interface for anything that
 isn't a person: editor plugins, agents, CI. Every filter composes with it. Each element
 carries the thread's `id`, `resolved` state, its `anchor` (the anchor.json document,
-SPEC.md §3, verbatim), the commit it was re-anchored `at`, the resulting `placement`
+SPEC.md §3, verbatim), the `moved_to` anchor when the thread was re-pinned (null
+otherwise), the commit it was re-anchored `at`, the resulting `placement`
 (`{"kind": "whole-commit" | "located" | "outdated"}`, with `path`/`lines`/`status` and
 `fuzz` when located), and its `messages` — folded state, so each message has its current
 `body` (null when retracted) plus `edited`/`retracted`/`draft` flags. Raw events stay one

@@ -72,6 +72,12 @@ The thread renders against its own `diff.head` using the derived snippet — alw
 because [retention parents](storage.md#retention-parents-discussed-commits-cant-be-garbage-collected)
 guarantee the original objects exist. An outdated thread is never lost; it's labeled history.
 
+It doesn't have to stay that way: `git threads move` re-pins the thread by hand (a `move`
+event carrying a fresh anchor, SPEC.md §2.4 rule 5), and the ladder starts from the new
+anchor on every later lookup. Human judgment supplies what content matching couldn't —
+across file splits, rewrites, renames-with-changes — and the moved thread ages gracefully
+again, because the new anchor re-anchors like any other.
+
 ### Kind-specific rules
 
 The ladder as described applies to `range` anchors. `commit` anchors are never re-anchored —

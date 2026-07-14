@@ -27,6 +27,10 @@ pub struct FoldedEvent {
 pub struct FoldedThread {
     /// SPEC.md §2.4 rule 2: latest `resolve` wins; default unresolved.
     pub resolved: bool,
+    /// SPEC.md §2.4 rule 5: the latest `move` event, whose `anchor` is where
+    /// re-anchoring starts from. `None` means the thread never moved and the
+    /// original anchor applies.
+    pub moved: Option<(EventId, Event)>,
     /// Comments and replies in display order (`ts`, then event ID), flat.
     pub events: Vec<FoldedEvent>,
 }
@@ -51,6 +55,14 @@ pub fn fold_thread(events: impl IntoIterator<Item = (EventId, Event)>) -> Folded
         .max_by_key(|(id, e)| sort_key(id, e))
         .and_then(|(_, e)| e.resolved)
         .unwrap_or(false);
+
+    // Rule 5: the latest move (by ts, id) carrying an anchor re-pins the
+    // thread. A move without an anchor is malformed and ignored.
+    let moved = events
+        .iter()
+        .filter(|(_, e)| e.kind == EventKind::Move && e.anchor.is_some())
+        .max_by_key(|(id, e)| sort_key(id, e))
+        .map(|(id, e)| (id.clone(), e.clone()));
 
     // Index edits and deletes by the event they supersede.
     let mut edits_by_target: BTreeMap<&EventId, Vec<(&EventId, &Event)>> = BTreeMap::new();
@@ -115,7 +127,7 @@ pub fn fold_thread(events: impl IntoIterator<Item = (EventId, Event)>) -> Folded
         .collect();
     folded.sort_by_key(|f| sort_key(&f.id, &f.event));
 
-    FoldedThread { resolved, events: folded }
+    FoldedThread { resolved, moved, events: folded }
 }
 
 #[cfg(test)]
@@ -133,6 +145,7 @@ mod tests {
             in_reply_to: None,
             supersedes: None,
             resolved: None,
+            anchor: None,
             extra: Default::default(),
         }
     }
@@ -164,6 +177,42 @@ mod tests {
         let mut e = event(EventKind::Resolve, email, ts);
         e.resolved = Some(resolved);
         with_id(e)
+    }
+
+    fn move_to(email: &str, ts: &str, path: &str) -> (EventId, Event) {
+        use crate::anchor::{Anchor, AnchorKind, DiffRef, Side};
+        use crate::id::GitOid;
+        let oid = || GitOid::from_hex("a".repeat(40)).unwrap();
+        let mut e = event(EventKind::Move, email, ts);
+        e.anchor = Some(Anchor {
+            v: 1,
+            kind: AnchorKind::File,
+            diff: DiffRef { base: oid(), head: oid() },
+            path: Some(path.into()),
+            old_path: None,
+            side: Some(Side::New),
+            lines: None,
+            blob: Some(oid()),
+            cols: None,
+            extra: Default::default(),
+        });
+        with_id(e)
+    }
+
+    #[test]
+    fn latest_move_wins() {
+        let root = comment("a@x", "2026-01-01T00:00:00Z", "b");
+        let state = fold_thread([root.clone()]);
+        assert_eq!(state.moved, None);
+
+        let m1 = move_to("a@x", "2026-01-01T01:00:00Z", "first.rs");
+        let m2 = move_to("b@x", "2026-01-01T02:00:00Z", "second.rs");
+        let state = fold_thread([root, m2.clone(), m1]);
+        let (id, event) = state.moved.expect("moved");
+        assert_eq!(id, m2.0);
+        assert_eq!(event.anchor.unwrap().path.as_deref(), Some("second.rs"));
+        // Moves are not conversation; they never display as messages.
+        assert_eq!(state.events.len(), 1);
     }
 
     #[test]

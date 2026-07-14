@@ -498,6 +498,67 @@ pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
     Ok(event_id)
 }
 
+/// The anchor re-anchoring starts from (SPEC.md §2.4 rule 5): the latest
+/// move's, else the thread's own. The original stays the record of what was
+/// discussed; the move records where that code lives now.
+fn effective_anchor<'a>(thread: &'a ThreadRecord, folded: &'a FoldedThread) -> &'a Anchor {
+    folded.moved.as_ref().and_then(|(_, e)| e.anchor.as_ref()).unwrap_or(&thread.anchor)
+}
+
+/// Re-pin a thread to where its code lives now: an empty-diff anchor on
+/// `at`, recorded as a `move` event (SPEC.md §2.1). The escape hatch for
+/// outdated threads — when the ladder can't follow the code, a person can.
+pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Result<EventId> {
+    let (thread, _) = find_message(store, prefix)?;
+    let repo = store.repo();
+    let target = resolve_commit(repo, at)?;
+    let (path, suffix) = split_line_suffix(file_spec);
+    let (blob_id, line_count) = blob_at(repo, target, path)?
+        .with_context(|| format!("{path:?} not found at {}", &target.to_string()[..12]))?;
+    let lines = suffix
+        .map(|spec| {
+            let range = parse_lines(spec)?;
+            if range.end as usize > line_count {
+                bail!("lines {spec} are out of range: {path:?} has {line_count} lines");
+            }
+            Ok(range)
+        })
+        .transpose()?;
+    let pin = GitOid::from_hex(target.to_string())?;
+    let anchor = Anchor {
+        v: 1,
+        kind: if lines.is_some() { AnchorKind::Range } else { AnchorKind::File },
+        diff: DiffRef { base: pin.clone(), head: pin },
+        path: Some(path.to_string()),
+        old_path: None,
+        side: Some(Side::New),
+        lines,
+        blob: Some(GitOid::from_hex(blob_id.to_string())?),
+        cols: None,
+        extra: Default::default(),
+    };
+    let event = new_event(repo, EventKind::Move, |e| {
+        e.anchor = Some(anchor);
+    })?;
+    let event_id = event.id()?;
+    store.draft(&Batch {
+        new_threads: vec![],
+        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
+    })?;
+    let ui = Ui::auto();
+    let location = match lines {
+        Some(l) => format!("{path}:{}-{}", l.start, l.end),
+        None => path.to_string(),
+    };
+    println!(
+        "drafted move of thread {} to {} {}",
+        ui.yellow(short(&thread.id)),
+        ui.bold(location),
+        ui.dim("(commit and push to share)")
+    );
+    Ok(event_id)
+}
+
 /// Mark a thread resolved (or reopen it). The prefix may name the thread or
 /// any comment/reply in it.
 pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
@@ -565,7 +626,16 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     if let Some(spec) = &file {
         let (path, lines) = split_line_suffix(spec);
         let lines = lines.map(parse_lines).transpose()?;
-        threads.retain(|t| anchor_matches(&t.anchor, path, lines));
+        // A moved thread is findable by both addresses: where it was
+        // discussed (its anchor) and where it lives now (its move).
+        threads.retain(|t| {
+            anchor_matches(&t.anchor, path, lines)
+                || fold_thread(t.events.clone())
+                    .moved
+                    .as_ref()
+                    .and_then(|(_, e)| e.anchor.as_ref())
+                    .is_some_and(|a| anchor_matches(a, path, lines))
+        });
     }
     let at_commit = resolve_commit(repo, &opts.at)?;
     let since = opts.since.as_deref().map(parse_date).transpose()?;
@@ -633,7 +703,8 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         if opts.max_count.is_some_and(|n| shown >= n) {
             break;
         }
-        let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
+        let effective = effective_anchor(&thread, &folded);
+        let placement = reanchor::reanchor(store, effective, at_commit)?;
         if opts.json {
             json_threads.push(thread_json(&thread, &folded, at_commit, &placement, &unseen)?);
             shown += 1;
@@ -643,6 +714,9 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
             vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
         if matches!(placement, Reanchor::Outdated) {
             deco.push(ui.red("outdated"));
+        }
+        if folded.moved.is_some() {
+            deco.push(ui.yellow("moved"));
         }
         if folded.events.len() > 1 {
             deco.push(ui.dim(format_args!("{} messages", folded.events.len())));
@@ -680,7 +754,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 .unwrap_or("");
             println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
             if let Some(mode) = snippet_mode {
-                print!("{}", anchor_snippet(ui, store, &thread.anchor, mode)?);
+                print!("{}", anchor_snippet(ui, store, effective, mode)?);
             }
         } else {
             if shown > 0 {
@@ -730,7 +804,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 }
             }
             if let Some(mode) = snippet_mode {
-                print!("{}", anchor_snippet(ui, store, &thread.anchor, mode)?);
+                print!("{}", anchor_snippet(ui, store, effective, mode)?);
             }
         }
         shown += 1;
@@ -812,10 +886,15 @@ fn thread_json(
             })
         })
         .collect();
+    let moved_to = match folded.moved.as_ref().and_then(|(_, e)| e.anchor.as_ref()) {
+        Some(anchor) => serde_json::to_value(anchor)?,
+        None => serde_json::Value::Null,
+    };
     Ok(json!({
         "id": thread.id.as_str(),
         "resolved": folded.resolved,
         "anchor": serde_json::to_value(&thread.anchor)?,
+        "moved_to": moved_to,
         "at": at.to_string(),
         "placement": placement,
         "messages": messages,
@@ -1098,7 +1177,7 @@ pub fn show_json(store: &Store, prefix: &str, at: &str) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
     let folded = fold_thread(thread.events.clone());
     let at_commit = resolve_commit(store.repo(), at)?;
-    let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
+    let placement = reanchor::reanchor(store, effective_anchor(&thread, &folded), at_commit)?;
     let unseen = unseen_ids(&thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
     println!(
         "{}",
@@ -1135,15 +1214,19 @@ fn render_thread(
     use std::fmt::Write;
     let folded = fold_thread(thread.events.clone());
     let anchor = &thread.anchor;
+    let effective = effective_anchor(thread, &folded);
     let mut out = String::new();
 
     let target = resolve_commit(store.repo(), at)?;
     let target_short = &target.to_string()[..12];
-    let placement = reanchor::reanchor(store, anchor, target)?;
+    let placement = reanchor::reanchor(store, effective, target)?;
 
     let mut deco = vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
     if matches!(placement, Reanchor::Outdated) {
         deco.push(ui.red("outdated"));
+    }
+    if folded.moved.is_some() {
+        deco.push(ui.yellow("moved"));
     }
     writeln!(
         out,
@@ -1173,13 +1256,32 @@ fn render_thread(
     )
     .unwrap();
 
+    if let Some((_, move_event)) = &folded.moved {
+        let location = match (&effective.path, &effective.lines) {
+            (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
+            (Some(path), None) => path.clone(),
+            _ => "whole change".to_string(),
+        };
+        writeln!(
+            out,
+            "Moved:  {} {}",
+            ui.bold(location),
+            ui.dim(format_args!(
+                "at {} by {}",
+                &effective.diff.head.as_str()[..12],
+                move_event.author.name
+            ))
+        )
+        .unwrap();
+    }
+
     match &placement {
         Reanchor::WholeCommit => {}
         Reanchor::Located { path, lines, status } => {
-            // Only news when the thread drifted: an exact hit at the anchor's
-            // own location goes without saying.
+            // Only news when the thread drifted: an exact hit at the
+            // effective anchor's own location goes without saying.
             let exact = matches!(status, ReanchorStatus::Exact);
-            if !exact || Some(path) != anchor.path.as_ref() || *lines != anchor.lines {
+            if !exact || Some(path) != effective.path.as_ref() || *lines != effective.lines {
                 let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
                 let status = format!("({status})");
                 let status = if exact { ui.green(status) } else { ui.yellow(status) };
@@ -1197,7 +1299,7 @@ fn render_thread(
     }
 
     let unseen = unseen_ids(thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
-    out.push_str(&anchor_snippet(ui, store, anchor, mode)?);
+    out.push_str(&anchor_snippet(ui, store, effective, mode)?);
     out.push_str(&render_conversation(ui, thread, &folded, &unseen));
     Ok(out)
 }
@@ -1537,6 +1639,7 @@ fn new_event(
         in_reply_to: None,
         supersedes: None,
         resolved: None,
+        anchor: None,
         extra: Default::default(),
     };
     fill(&mut event);

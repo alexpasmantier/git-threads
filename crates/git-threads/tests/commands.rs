@@ -441,6 +441,62 @@ fn json_output_carries_folded_state_and_placement() {
 }
 
 #[test]
+fn move_repins_an_outdated_thread() {
+    let dir = setup_repo();
+    let path = dir.path();
+    let store = Store::open(path).unwrap();
+
+    let mut on_lines = opts("what does b do?");
+    on_lines.file = Some("src/lib.rs:2".into());
+    let thread_id = commands::comment(&store, &on_lines).unwrap();
+    store.commit_drafts().unwrap().unwrap();
+
+    // The code moves beyond what the ladder can follow: the file vanishes
+    // and its replacement shares nothing with it.
+    fs::remove_file(path.join("src/lib.rs")).unwrap();
+    fs::write(path.join("src/core.rs"), "// a fresh start\nfn brand_new() {}\n").unwrap();
+    git(path, &["add", "-A"]);
+    git(path, &["commit", "-q", "-m", "restructure"]);
+
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    assert!(run(&["show", thread_id.as_str()]).contains("outdated"));
+
+    // A location that doesn't exist is rejected; a real one re-pins.
+    let err =
+        commands::move_thread(&store, &thread_id.as_str()[..8], "src/gone.rs", "HEAD").unwrap_err();
+    assert!(err.to_string().contains("not found"), "unexpected error: {err:#}");
+    commands::move_thread(&store, &thread_id.as_str()[..8], "src/core.rs:2", "HEAD").unwrap();
+
+    let shown = run(&["show", thread_id.as_str()]);
+    assert!(shown.contains("moved") && !shown.contains("outdated"), "{shown}");
+    assert!(shown.contains("Moved:  src/core.rs:2-2"), "{shown}");
+
+    // Findable under both addresses: where it was, and where it is.
+    assert!(run(&["list", "src/lib.rs", "--oneline"]).contains(&thread_id.as_str()[..12]));
+    assert!(run(&["list", "src/core.rs", "--oneline"]).contains(&thread_id.as_str()[..12]));
+
+    // json carries the move; placement now starts from it (exact blob hit).
+    let json: serde_json::Value =
+        serde_json::from_str(&run(&["show", thread_id.as_str(), "--json"])).unwrap();
+    assert_eq!(json["moved_to"]["path"], "src/core.rs");
+    assert_eq!(json["placement"]["status"], "exact");
+
+    // Sealing the move pins the commit it anchors to (SPEC.md §5.2).
+    store.commit_drafts().unwrap().unwrap();
+    let head = git_out(path, &["rev-parse", "HEAD"]);
+    let parents = git_out(path, &["log", "--pretty=%P", "-1", "refs/threads/data"]);
+    assert!(parents.contains(&head), "retention parent missing: {parents}");
+}
+
+#[test]
 fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

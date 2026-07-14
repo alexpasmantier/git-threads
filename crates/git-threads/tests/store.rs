@@ -71,6 +71,7 @@ fn event(kind: EventKind, ts: &str) -> Event {
         in_reply_to: None,
         supersedes: None,
         resolved: None,
+        anchor: None,
         extra: Default::default(),
     }
 }

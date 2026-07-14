@@ -1,5 +1,6 @@
 //! Events (SPEC.md §2.1–§2.3).
 
+use crate::anchor::Anchor;
 use crate::canonical::{CanonicalError, to_canonical_json};
 use crate::id::EventId;
 use serde::{Deserialize, Serialize};
@@ -106,6 +107,7 @@ pub enum EventKind {
     Edit,
     Resolve,
     Delete,
+    Move,
     Other(String),
 }
 
@@ -117,6 +119,7 @@ impl From<String> for EventKind {
             "edit" => EventKind::Edit,
             "resolve" => EventKind::Resolve,
             "delete" => EventKind::Delete,
+            "move" => EventKind::Move,
             _ => EventKind::Other(s),
         }
     }
@@ -130,6 +133,7 @@ impl From<EventKind> for String {
             EventKind::Edit => "edit".into(),
             EventKind::Resolve => "resolve".into(),
             EventKind::Delete => "delete".into(),
+            EventKind::Move => "move".into(),
             EventKind::Other(s) => s,
         }
     }
@@ -153,6 +157,8 @@ pub struct Event {
     pub supersedes: Option<EventId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<Anchor>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -175,11 +181,14 @@ impl Event {
             return Err(EventError::UnsupportedVersion(self.v));
         }
         let (required, forbidden): (&[&str], &[&str]) = match self.kind {
-            EventKind::Comment => (&["body"], &["in_reply_to", "supersedes", "resolved"]),
-            EventKind::Reply => (&["body", "in_reply_to"], &["supersedes", "resolved"]),
-            EventKind::Edit => (&["body", "supersedes"], &["in_reply_to", "resolved"]),
-            EventKind::Resolve => (&["resolved"], &["body", "in_reply_to", "supersedes"]),
-            EventKind::Delete => (&["supersedes"], &["body", "in_reply_to", "resolved"]),
+            EventKind::Comment => (&["body"], &["in_reply_to", "supersedes", "resolved", "anchor"]),
+            EventKind::Reply => (&["body", "in_reply_to"], &["supersedes", "resolved", "anchor"]),
+            EventKind::Edit => (&["body", "supersedes"], &["in_reply_to", "resolved", "anchor"]),
+            EventKind::Resolve => {
+                (&["resolved"], &["body", "in_reply_to", "supersedes", "anchor"])
+            }
+            EventKind::Delete => (&["supersedes"], &["body", "in_reply_to", "resolved", "anchor"]),
+            EventKind::Move => (&["anchor"], &["body", "in_reply_to", "supersedes", "resolved"]),
             EventKind::Other(_) => (&[], &[]),
         };
         let kind = String::from(self.kind.clone());
@@ -188,37 +197,31 @@ impl Event {
             "in_reply_to" => self.in_reply_to.is_some(),
             "supersedes" => self.supersedes.is_some(),
             "resolved" => self.resolved.is_some(),
+            "anchor" => self.anchor.is_some(),
             _ => unreachable!(),
         };
         for &field in required {
             if !present(field) {
-                return Err(EventError::MissingField {
-                    kind: kind.clone(),
-                    field: match field {
-                        "body" => "body",
-                        "in_reply_to" => "in_reply_to",
-                        "supersedes" => "supersedes",
-                        "resolved" => "resolved",
-                        _ => unreachable!(),
-                    },
-                });
+                return Err(EventError::MissingField { kind: kind.clone(), field: leak(field) });
             }
         }
         for &field in forbidden {
             if present(field) {
-                return Err(EventError::ForbiddenField {
-                    kind: kind.clone(),
-                    field: match field {
-                        "body" => "body",
-                        "in_reply_to" => "in_reply_to",
-                        "supersedes" => "supersedes",
-                        "resolved" => "resolved",
-                        _ => unreachable!(),
-                    },
-                });
+                return Err(EventError::ForbiddenField { kind: kind.clone(), field: leak(field) });
             }
         }
         Ok(())
+    }
+}
+
+fn leak(field: &str) -> &'static str {
+    match field {
+        "body" => "body",
+        "in_reply_to" => "in_reply_to",
+        "supersedes" => "supersedes",
+        "resolved" => "resolved",
+        "anchor" => "anchor",
+        _ => unreachable!(),
     }
 }
 
@@ -243,6 +246,7 @@ mod tests {
             in_reply_to: None,
             supersedes: None,
             resolved: None,
+            anchor: None,
             extra: Default::default(),
         }
     }
@@ -306,6 +310,14 @@ mod tests {
         assert!(matches!(
             event.validate(),
             Err(EventError::MissingField { field: "in_reply_to", .. })
+        ));
+
+        let mut event = comment("2026-01-01T00:00:00Z", "b");
+        event.kind = EventKind::Move;
+        event.body = None;
+        assert!(matches!(
+            event.validate(),
+            Err(EventError::MissingField { field: "anchor", .. })
         ));
     }
 

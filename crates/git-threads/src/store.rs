@@ -429,15 +429,12 @@ impl Store {
             )?;
             for event in std::iter::once(&new_thread.root).chain(&new_thread.events) {
                 self.put_event(editor, &thread_id, event)?;
+                if let Some(anchor) = &event.anchor {
+                    self.pin_anchor(anchor, &mut anchored_heads)?;
+                }
                 events += 1;
             }
-            // Anchored-commit retention (SPEC.md §5.2): the discussed commit
-            // becomes an extra parent so reachability keeps it alive.
-            let head = git_oid(new_thread.anchor.diff.head.as_str())?;
-            self.repo
-                .find_commit(head)
-                .with_context(|| format!("anchored commit {head} not present locally"))?;
-            anchored_heads.insert(head);
+            self.pin_anchor(&new_thread.anchor, &mut anchored_heads)?;
             touched.insert(thread_id);
         }
 
@@ -456,11 +453,27 @@ impl Store {
                     bail!("only a thread root may be a comment event; use a reply");
                 }
                 self.put_event(editor, &append.thread, event)?;
+                if let Some(anchor) = &event.anchor {
+                    self.pin_anchor(anchor, &mut anchored_heads)?;
+                }
                 events += 1;
             }
             touched.insert(append.thread.clone());
         }
         Ok(BatchStats { anchored_heads, touched, events })
+    }
+
+    /// Anchored-commit retention (SPEC.md §5.2): the commit an anchor points
+    /// at becomes an extra parent so reachability keeps it alive. Applies to
+    /// thread anchors and to anchors carried by events (`move`).
+    fn pin_anchor(&self, anchor: &Anchor, heads: &mut BTreeSet<ObjectId>) -> Result<()> {
+        anchor.validate()?;
+        let head = git_oid(anchor.diff.head.as_str())?;
+        self.repo
+            .find_commit(head)
+            .with_context(|| format!("anchored commit {head} not present locally"))?;
+        heads.insert(head);
+        Ok(())
     }
 
     /// Create the commit object and update `refname` with compare-and-swap
