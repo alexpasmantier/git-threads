@@ -1186,8 +1186,27 @@ pub fn show_json(store: &Store, prefix: &str, at: &str) -> Result<()> {
     Ok(())
 }
 
-/// Mark one thread — or everything — seen without opening it.
-pub fn seen(store: &Store, prefix: Option<&str>) -> Result<()> {
+/// Mark one thread — or everything — seen without opening it. `undo`
+/// rewinds the latest mark instead (marks chain, so this is one step back).
+pub fn seen(store: &Store, prefix: Option<&str>, undo: bool) -> Result<()> {
+    if undo {
+        if !store.undo_seen()? {
+            println!("nothing to undo (no seen mark)");
+            return Ok(());
+        }
+        let seen = store.seen_event_ids()?;
+        let me = identity(store.repo()).ok();
+        let with_news = store
+            .threads()?
+            .iter()
+            .filter(|t| !unseen_ids(t, &seen, me.as_ref()).is_empty())
+            .count();
+        println!(
+            "rewound the seen mark; {with_news} thread{} with new activity",
+            if with_news == 1 { "" } else { "s" }
+        );
+        return Ok(());
+    }
     match prefix {
         Some(prefix) => {
             let (thread, _) = find_message(store, prefix)?;

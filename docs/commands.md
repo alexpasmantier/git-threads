@@ -303,10 +303,15 @@ flag).
 
 ```
 git threads seen [thread-or-message]
+git threads seen --undo
 ```
 
 Marks one thread seen without opening it — or, with no argument, everything: inbox zero.
-The mark is per clone and never shared; there is no way (and no need) to un-see.
+The mark is per clone and never shared.
+
+Marks chain: every mark (a `show`, a `seen`) keeps the previous one as its parent, so
+`--undo` rewinds exactly one step — the cure for a fat-fingered bulk `seen`. Undoing the
+very first mark returns the clone to "nothing seen yet".
 
 ## Sharing
 

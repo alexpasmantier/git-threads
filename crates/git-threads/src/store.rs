@@ -142,16 +142,43 @@ impl Store {
         Ok(self.ref_tip(SEEN_REF)?.is_some())
     }
 
-    /// Mark everything currently published as seen: point the seen ref at
-    /// the data tip (its tree is the snapshot wanted). No data, no mark.
+    /// Mark everything currently published as seen: a seen commit carrying
+    /// the data tip's tree. No data, no mark.
     pub fn mark_all_seen(&self) -> Result<()> {
         let Some(tip) = self.tip()? else {
             return Ok(());
         };
-        self.repo
-            .reference(SEEN_REF, tip, PreviousValue::Any, "git-threads: seen")
-            .with_context(|| format!("failed to update {SEEN_REF}"))?;
+        let tree = self.repo.find_commit(tip)?.tree_id()?.detach();
+        let seen_tip = self.ref_tip(SEEN_REF)?;
+        if self.tree_id_of(seen_tip)? == tree {
+            return Ok(());
+        }
+        self.commit(SEEN_REF, "threads: seen", tree, seen_tip.into_iter().collect(), seen_tip)?;
         Ok(())
+    }
+
+    /// Rewind the seen mark one step: marks chain through their parent, so
+    /// the previous mark is always one commit away, and undoing the very
+    /// first mark deletes the ref (nothing had been seen). `false` when
+    /// there is no mark to undo.
+    pub fn undo_seen(&self) -> Result<bool> {
+        let Some(tip) = self.ref_tip(SEEN_REF)? else {
+            return Ok(false);
+        };
+        let commit = self.repo.find_commit(tip)?;
+        if commit.message_raw_sloppy() != "threads: seen".as_bytes() {
+            // A mark written by an older version pointed straight at a data
+            // commit; its parents are data history, not seen history.
+            bail!("the current seen mark has no history to rewind (written by an older version)");
+        }
+        match commit.parent_ids().next() {
+            Some(parent) => {
+                let parent = parent.detach();
+                self.update_ref(SEEN_REF, Some(tip), parent, "git-threads: seen undo")?;
+            }
+            None => self.delete_ref(SEEN_REF)?,
+        }
+        Ok(true)
     }
 
     /// Mark one thread seen: copy its published directory into the seen
@@ -172,7 +199,7 @@ impl Store {
         if new_tree == base_tree_id {
             return Ok(());
         }
-        self.commit(SEEN_REF, "threads: seen", new_tree, Vec::new(), seen_tip)?;
+        self.commit(SEEN_REF, "threads: seen", new_tree, seen_tip.into_iter().collect(), seen_tip)?;
         Ok(())
     }
 

@@ -114,6 +114,9 @@ enum Command {
     Seen {
         /// Thread ID or the ID of any message in it (or a unique prefix)
         thread: Option<String>,
+        /// Rewind the latest seen mark instead (one step back)
+        #[arg(long, conflicts_with = "thread")]
+        undo: bool,
     },
     /// Fetch and integrate threads data from a remote
     Pull {
@@ -295,7 +298,7 @@ fn main() -> anyhow::Result<()> {
             commands::show(&store, &thread, &at, mode)
         }
         Command::Status => commands::status(&store),
-        Command::Seen { thread } => commands::seen(&store, thread.as_deref()),
+        Command::Seen { thread, undo } => commands::seen(&store, thread.as_deref(), undo),
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),

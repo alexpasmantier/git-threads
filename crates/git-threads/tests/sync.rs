@@ -290,6 +290,21 @@ fn inbox_tracks_new_activity_across_clones() {
     run(&bob, &["seen"]);
     comment(&bob_store, "bob's own thread");
     assert_eq!(run(&bob, &["list", "--new"]).trim(), "no threads");
+
+    // Marks chain: --undo rewinds the bulk `seen` and only that — the
+    // thread bob actually read stays read.
+    run(&bob, &["seen", "--undo"]);
+    let restored = run(&bob, &["list", "--new", "--oneline"]);
+    assert!(restored.contains(&second.as_str()[..12]), "{restored}");
+    assert!(!restored.contains(&first.as_str()[..12]), "{restored}");
+
+    // Undoing all the way back lands on "nothing seen yet".
+    run(&bob, &["seen", "--undo"]); // the show of `first`
+    run(&bob, &["seen", "--undo"]); // init's seed mark
+    assert!(git(&bob, &["for-each-ref", "refs/threads/seen"]).is_empty());
+    let everything = run(&bob, &["list", "--new", "--oneline"]);
+    assert!(everything.contains(&first.as_str()[..12]), "{everything}");
+    assert!(run(&bob, &["seen", "--undo"]).contains("nothing to undo"));
 }
 
 #[test]
