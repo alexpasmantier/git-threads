@@ -48,7 +48,8 @@ recomputed against whatever commit you're looking at.
 ## Status
 
 Experimental. The format and CLI cover the core loop — comment, reply, edit, delete, resolve,
-discard, show, list, and the git-shaped pull/commit/push cycle with drafts, session batching,
+move, discard, show, list (with `--grep` search and `--json` output), status, a local inbox
+(`list --new`), and the git-shaped pull/commit/push cycle with drafts, session batching,
 and re-anchoring — but the spec is a draft and may still change.
 This repository dogfoods itself: its own review threads live on its `refs/threads/data`.
 
@@ -64,7 +65,9 @@ $ git threads comment main...topic src/parser.rs:120 \
     -m "same, on a branch's whole diff"     # ranges work like git diff
 $ git threads list                          # threads, re-anchored to your checkout
 $ git threads list main...topic --open      # what still needs attention on this branch
+$ git threads list --new                    # what did I miss?
 $ git threads show <thread-id>              # code context + conversation
+$ git threads status                        # drafts, unpushed events, new activity
 $ git threads commit                        # seal your drafts into local history
 $ git threads push                          # share; safe under concurrent pushes
 ```
