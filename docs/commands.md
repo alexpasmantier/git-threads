@@ -173,8 +173,8 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 ### `git threads list`
 
 ```
-git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline] [-p]
-                 [-n <num>] [--author <who>] [--since <date>] [--until <date>]
+git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline]
+                 [-p | --stat] [-n <num>] [--author <who>] [--since <date>] [--until <date>]
 ```
 
 All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
@@ -207,7 +207,8 @@ line — ID, decorations, location, first line of the root — the way `git log 
 does. `-p` / `--patch` appends the change each thread discusses, the way `git log -p`
 appends patches: a diff clipped to the hunks overlapping the anchored lines, the whole
 patch for whole-change threads, and the annotated file excerpt when there is no diff to
-show (snapshot annotations). It composes with `--oneline`.
+show (snapshot annotations). `--stat` appends the diffstat instead, like
+`git log --stat`. Both compose with `--oneline`.
 
 The rest of git log's narrowing vocabulary applies to the thread's root comment:
 `-n <num>` / `--max-count` stops after that many threads, `--author <who>` keeps threads
@@ -218,14 +219,18 @@ whose author matches (case-insensitive substring of name or email), and `--since
 ### `git threads show`
 
 ```
-git threads show <thread-or-message> [--at <commit>]
+git threads show <thread-or-message> [--at <commit>] [-p | --stat]
 ```
 
 One thread in full: the anchor and its diff, where the thread lands on `--at` per the
-re-anchoring ladder (the `Now:` line), the change being discussed rendered as a diff
-(clipped to the anchored lines; the annotated file excerpt when there is no diff to
-show), and the folded conversation — each message with its ID, author, date, and
-`(edited)` / `(draft)` / `[retracted]` markers.
+re-anchoring ladder (the `Now:` line), the change being discussed, and the folded
+conversation — each message with its ID, author, date, and `(edited)` / `(draft)` /
+`[retracted]` markers.
+
+The change renders bounded by default: line anchors show the diff clipped to their hunks,
+whole-change and whole-file anchors show the diffstat (`git log --stat` style), and
+snapshot annotations show the annotated file excerpt. `-p` expands to the full patch;
+`--stat` forces the diffstat.
 
 ## Sharing
 

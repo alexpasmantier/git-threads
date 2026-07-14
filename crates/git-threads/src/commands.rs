@@ -524,6 +524,7 @@ pub struct ListOpts {
     pub resolved: Option<bool>,
     pub oneline: bool,
     pub patch: bool,
+    pub stat: bool,
     /// git log's -n: stop after this many threads.
     pub max_count: Option<usize>,
     /// Substring of the root author's name or email, case-insensitive.
@@ -559,6 +560,11 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     let until = opts.until.as_deref().map(parse_date).transpose()?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
+    let snippet_mode = match (opts.patch, opts.stat) {
+        (_, true) => Some(SnippetMode::Stat),
+        (true, _) => Some(SnippetMode::Patch),
+        _ => None,
+    };
     let ui = Ui::auto();
     let mut shown = 0;
     for thread in threads {
@@ -625,8 +631,8 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 .next()
                 .unwrap_or("");
             println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
-            if opts.patch {
-                print!("{}", anchor_snippet(ui, store, &thread.anchor)?);
+            if let Some(mode) = snippet_mode {
+                print!("{}", anchor_snippet(ui, store, &thread.anchor, mode)?);
             }
         } else {
             if shown > 0 {
@@ -675,8 +681,8 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                     println!("    {line}");
                 }
             }
-            if opts.patch {
-                print!("{}", anchor_snippet(ui, store, &thread.anchor)?);
+            if let Some(mode) = snippet_mode {
+                print!("{}", anchor_snippet(ui, store, &thread.anchor, mode)?);
             }
         }
         shown += 1;
@@ -732,20 +738,39 @@ fn parse_date(spec: &str) -> Result<jiff::Timestamp> {
     bail!("cannot parse date {spec:?} (try ISO like 2026-07-01, or \"2 weeks ago\")")
 }
 
+/// How much of the anchored change to render, following git log's levels.
+#[derive(Clone, Copy, PartialEq)]
+pub enum SnippetMode {
+    /// Bounded by default: clipped hunks for line anchors, a diffstat when
+    /// the anchor covers a whole file or change.
+    Auto,
+    /// git log -p: the full patch (line anchors keep their marks).
+    Patch,
+    /// git log --stat: the diffstat, whatever the anchor.
+    Stat,
+}
+
 /// The context a thread is about. Comments target diffs, so this is the
 /// anchored change itself, rendered as git renders diffs. When there is no
 /// change to show — snapshot annotations (an empty diff), or anchors whose
 /// lines predate the diff-intersection rule — the annotated file stands in.
-fn anchor_snippet(ui: Ui, store: &Store, anchor: &Anchor) -> Result<String> {
+fn anchor_snippet(ui: Ui, store: &Store, anchor: &Anchor, mode: SnippetMode) -> Result<String> {
     if anchor.diff.base != anchor.diff.head {
         let (base, head) = (anchor.diff.base.as_str(), anchor.diff.head.as_str());
-        let mut args = vec!["diff", base, head];
+        let stat = mode == SnippetMode::Stat
+            || (mode == SnippetMode::Auto && anchor.lines.is_none());
+        let mut args = if stat { vec!["diff", "--stat", base, head] } else { vec!["diff", base, head] };
         if let Some(path) = &anchor.path {
             args.extend(["--", path]);
         }
-        let diff = git(store.repo().git_dir(), &args)?;
-        let side = anchor.side.unwrap_or(Side::New);
-        let rendered = render_diff(ui, &diff, side, anchor.lines, anchor.path.is_none());
+        let out = git(store.repo().git_dir(), &args)?;
+        let rendered = if stat {
+            render_stat(ui, &out)
+        } else {
+            let side = anchor.side.unwrap_or(Side::New);
+            let clip = mode != SnippetMode::Patch;
+            render_diff(ui, &out, side, anchor.lines, anchor.path.is_none(), clip)
+        };
         if !rendered.is_empty() {
             return Ok(rendered);
         }
@@ -757,16 +782,39 @@ fn anchor_snippet(ui: Ui, store: &Store, anchor: &Anchor) -> Result<String> {
     Ok(String::new())
 }
 
-/// Render a unified diff the way git colors it, keeping only the hunks that
-/// overlap the anchored `lines` on `side` (all of them when `lines` is
-/// `None`) and marking the anchored lines in the gutter. File headers are
-/// shown only for whole-change diffs (`headers`), where they separate files.
+/// Render `git diff --stat` output the way git log --stat does: insertion
+/// marks green, deletion marks red.
+fn render_stat(ui: Ui, stat: &str) -> String {
+    use std::fmt::Write;
+    if stat.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n");
+    for line in stat.lines() {
+        match line.rsplit_once('|') {
+            Some((left, graph)) => {
+                let graph =
+                    graph.replace('+', &ui.green("+")).replace('-', &ui.red("-"));
+                writeln!(out, " {left}|{graph}").unwrap();
+            }
+            None => writeln!(out, " {line}").unwrap(),
+        }
+    }
+    out
+}
+
+/// Render a unified diff the way git colors it, marking the anchored
+/// `lines` on `side` in the gutter. With `clip`, only hunks overlapping the
+/// anchored lines are kept (all of them when `lines` is `None`). File
+/// headers are shown only for whole-change diffs (`headers`), where they
+/// separate files.
 fn render_diff(
     ui: Ui,
     diff: &str,
     side: Side,
     lines: Option<LineRange>,
     headers: bool,
+    clip: bool,
 ) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -793,10 +841,11 @@ fn render_diff(
                 Side::Old => old,
                 Side::New => new,
             };
-            wanted = lines.is_none_or(|want| {
-                let end = start + len.max(1) - 1;
-                want.start <= end && want.end >= start
-            });
+            wanted = !clip
+                || lines.is_none_or(|want| {
+                    let end = start + len.max(1) - 1;
+                    want.start <= end && want.end >= start
+                });
             if wanted {
                 writeln!(out, "  {}", ui.cyan(line)).unwrap();
             }
@@ -905,15 +954,21 @@ fn range_commits(
 /// the re-anchored location when there is one, from the anchor's own diff
 /// when outdated (§4.2 step 4). The prefix may name the thread or any
 /// comment/reply in it.
-pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
+pub fn show(store: &Store, prefix: &str, at: &str, mode: SnippetMode) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
-    print!("{}", render_thread(Ui::auto(), store, &thread, at)?);
+    print!("{}", render_thread(Ui::auto(), store, &thread, at, mode)?);
     Ok(())
 }
 
 /// The full thread as `show` prints it: header, re-anchor placement, code
 /// context, conversation.
-fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Result<String> {
+fn render_thread(
+    ui: Ui,
+    store: &Store,
+    thread: &ThreadRecord,
+    at: &str,
+    mode: SnippetMode,
+) -> Result<String> {
     use std::fmt::Write;
     let folded = fold_thread(thread.events.clone());
     let anchor = &thread.anchor;
@@ -978,7 +1033,7 @@ fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Resu
         }
     }
 
-    out.push_str(&anchor_snippet(ui, store, anchor)?);
+    out.push_str(&anchor_snippet(ui, store, anchor, mode)?);
     out.push_str(&render_conversation(ui, thread, &folded));
     Ok(out)
 }
@@ -1020,7 +1075,10 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
 /// when `reply` runs without --message.
 pub fn thread_preview(store: &Store, prefix: &str) -> Result<String> {
     let (thread, _) = find_message(store, prefix)?;
-    Ok(format!("replying to:\n\n{}", render_thread(Ui::plain(), store, &thread, "HEAD")?))
+    Ok(format!(
+        "replying to:\n\n{}",
+        render_thread(Ui::plain(), store, &thread, "HEAD", SnippetMode::Auto)?
+    ))
 }
 
 /// Discard one drafted event before publishing. Discarding a drafted

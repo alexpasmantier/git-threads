@@ -80,6 +80,12 @@ enum Command {
         /// Commit to re-anchor the thread against
         #[arg(long, default_value = "HEAD")]
         at: String,
+        /// Show the anchored change's full patch, as `git log -p` does
+        #[arg(short, long)]
+        patch: bool,
+        /// Show the anchored change's diffstat, as `git log --stat` does
+        #[arg(long, conflicts_with = "patch")]
+        stat: bool,
     },
     /// Discard drafted events before they're published
     Discard {
@@ -122,9 +128,12 @@ enum Command {
         /// One line per thread instead of the full block
         #[arg(long)]
         oneline: bool,
-        /// Show each thread's code snippet, as `git log -p` shows patches
+        /// Show each thread's anchored change, as `git log -p` shows patches
         #[arg(short, long)]
         patch: bool,
+        /// Show each thread's diffstat, as `git log --stat` does
+        #[arg(long, conflicts_with = "patch")]
+        stat: bool,
         /// Limit the number of threads shown
         #[arg(short = 'n', long = "max-count", value_name = "NUMBER")]
         max_count: Option<usize>,
@@ -241,7 +250,14 @@ fn main() -> anyhow::Result<()> {
             (Some(event), false) => commands::discard(&store, &event),
             _ => anyhow::bail!("pass a draft event ID, or --all"),
         },
-        Command::Show { thread, at } => commands::show(&store, &thread, &at),
+        Command::Show { thread, at, patch, stat } => {
+            let mode = match (patch, stat) {
+                (true, _) => commands::SnippetMode::Patch,
+                (_, true) => commands::SnippetMode::Stat,
+                _ => commands::SnippetMode::Auto,
+            };
+            commands::show(&store, &thread, &at, mode)
+        }
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
@@ -253,6 +269,7 @@ fn main() -> anyhow::Result<()> {
             resolved,
             oneline,
             patch,
+            stat,
             max_count,
             author,
             since,
@@ -272,6 +289,7 @@ fn main() -> anyhow::Result<()> {
                     resolved: state,
                     oneline,
                     patch,
+                    stat,
                     max_count,
                     author,
                     since,
