@@ -13,11 +13,16 @@ pub struct Ui {
 }
 
 impl Ui {
-    /// Color iff stdout is a terminal that wants it.
+    /// Color iff stdout is a terminal that wants it. Decided once per
+    /// process, so the pager can lock it in before replacing stdout with
+    /// its pipe.
     pub fn auto() -> Self {
-        let color = std::io::stdout().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
-            && std::env::var_os("TERM").is_none_or(|t| t != "dumb");
+        static COLOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let color = *COLOR.get_or_init(|| {
+            std::io::stdout().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+                && std::env::var_os("TERM").is_none_or(|t| t != "dumb")
+        });
         Ui { color }
     }
 

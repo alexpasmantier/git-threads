@@ -4,6 +4,7 @@
 
 pub mod commands;
 pub mod editor;
+pub mod pager;
 pub mod reanchor;
 pub mod store;
 pub mod ui;

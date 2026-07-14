@@ -171,6 +171,9 @@ fn main() -> anyhow::Result<()> {
     if let Err(err) = commands::integrate_fetched(&store) {
         eprintln!("warning: could not integrate fetched threads data: {err:#}");
     }
+    // Reading commands page like git log; the pager winds down on drop.
+    let _pager = matches!(command, Command::List { .. } | Command::Show { .. })
+        .then(git_threads::pager::Pager::start);
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
         Command::Deinit { force } => commands::deinit(&store, force),

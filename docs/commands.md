@@ -166,6 +166,10 @@ at `commit`.
 
 ## Reading
 
+Both reading commands page like `git log`: the pager is resolved the way git resolves it
+(`GIT_PAGER`, `core.pager`, `PAGER`, then `less`), only when stdout is a terminal.
+`git --no-pager threads list` and `GIT_PAGER=cat` turn it off.
+
 ### `git threads list`
 
 ```
@@ -194,12 +198,12 @@ $ git threads list src/ --resolved          # settled questions under src/
 ```
 
 Threads print newest first as `git log`-style blocks: a `thread <id>` header with
-decorations (`open`/`resolved`, message and draft counts when they say something),
-`Author:` / `Date:` / `Anchor:` fields, a `Now:` field when the thread drifted against
-`--at` (default `HEAD`; `(relocated)`, `(fuzzy(f))`, `(outdated)` — omitted when the anchor
-still matches exactly), and the root comment indented below. `--oneline` compresses each
-thread to one line — ID, decorations, location, first line of the root — the way
-`git log --oneline` does.
+decorations (`open`/`resolved`, `outdated` when the anchor no longer matches at `--at`,
+message and draft counts when they say something), `Author:` / `Date:` / `Anchor:` fields,
+a `Now:` field when the thread moved (`(relocated)` / `(fuzzy(f))` against `--at`, default
+`HEAD`), and the root comment indented below. `--oneline` compresses each thread to one
+line — ID, decorations, location, first line of the root — the way `git log --oneline`
+does.
 
 ### `git threads show`
 

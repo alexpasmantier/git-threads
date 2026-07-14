@@ -551,8 +551,12 @@ pub fn list(
         if resolved.is_some_and(|want| folded.resolved != want) {
             continue;
         }
+        let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
         let mut deco =
             vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
+        if matches!(placement, Reanchor::Outdated) {
+            deco.push(ui.red("outdated"));
+        }
         if folded.events.len() > 1 {
             deco.push(ui.dim(format_args!("{} messages", folded.events.len())));
         }
@@ -567,18 +571,17 @@ pub fn list(
             _ if oneline => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
             _ => "whole change".to_string(),
         };
-        let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
         let root = folded.events.first();
         if oneline {
             let drift = match &placement {
                 Reanchor::WholeCommit
-                | Reanchor::Located { status: ReanchorStatus::Exact, .. } => String::new(),
+                | Reanchor::Located { status: ReanchorStatus::Exact, .. }
+                | Reanchor::Outdated => String::new(),
                 Reanchor::Located { path, lines, status } => {
                     let lines =
                         lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
                     ui.yellow(format_args!(" → {path}{lines} ({status})"))
                 }
-                Reanchor::Outdated => ui.red(" (outdated)"),
             };
             let title = root
                 .and_then(|r| r.effective_body.as_deref())
@@ -611,7 +614,8 @@ pub fn list(
             );
             match &placement {
                 Reanchor::WholeCommit
-                | Reanchor::Located { status: ReanchorStatus::Exact, .. } => {}
+                | Reanchor::Located { status: ReanchorStatus::Exact, .. }
+                | Reanchor::Outdated => {}
                 Reanchor::Located { path, lines, status } => {
                     let lines =
                         lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
@@ -621,7 +625,6 @@ pub fn list(
                         ui.yellow(format_args!("({status})"))
                     );
                 }
-                Reanchor::Outdated => println!("Now:    {}", ui.red("(outdated)")),
             }
             let body = match root {
                 Some(root) if root.retracted => ui.dim("[retracted]"),
@@ -728,12 +731,19 @@ fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Resu
     let anchor = &thread.anchor;
     let mut out = String::new();
 
-    let status = if folded.resolved { ui.magenta("resolved") } else { ui.green("open") };
+    let target = resolve_commit(store.repo(), at)?;
+    let target_short = &target.to_string()[..12];
+    let placement = reanchor::reanchor(store, anchor, target)?;
+
+    let mut deco = vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
+    if matches!(placement, Reanchor::Outdated) {
+        deco.push(ui.red("outdated"));
+    }
     writeln!(
         out,
         "{} {}",
         ui.yellow(format_args!("thread {}", thread.id)),
-        decorate(ui, &[status])
+        decorate(ui, &deco)
     )
     .unwrap();
     let side = match anchor.side {
@@ -757,9 +767,6 @@ fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Resu
     )
     .unwrap();
 
-    let target = resolve_commit(store.repo(), at)?;
-    let target_short = &target.to_string()[..12];
-    let placement = reanchor::reanchor(store, anchor, target)?;
     match &placement {
         Reanchor::WholeCommit => {}
         Reanchor::Located { path, lines, status } => {
@@ -782,7 +789,7 @@ fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Resu
             writeln!(
                 out,
                 "Now:    {} at {target_short} {}",
-                ui.red("(outdated)"),
+                ui.red("no match"),
                 ui.dim("— showing the anchor's own context")
             )
             .unwrap();
