@@ -64,6 +64,54 @@ impl Ui {
     }
 }
 
+/// Columns available on the terminal, decided once per process so the pager
+/// can lock it in before replacing stdout with its pipe. `None` when stdout
+/// isn't a terminal: piped output should not be wrapped.
+pub fn text_width() -> Option<usize> {
+    static WIDTH: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *WIDTH.get_or_init(|| {
+        if !std::io::stdout().is_terminal() {
+            return None;
+        }
+        #[cfg(unix)]
+        unsafe {
+            let mut ws: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(1, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+                return Some(ws.ws_col as usize);
+            }
+        }
+        Some(80)
+    })
+}
+
+/// Wrap one line of prose to `width` columns at word boundaries. Leading
+/// whitespace is kept and repeated on continuation lines, so indented text
+/// (bullets, quoted code) stays visually grouped. Lines that fit — and
+/// single words that don't — pass through untouched.
+pub fn wrap(line: &str, width: usize) -> Vec<String> {
+    if line.chars().count() <= width {
+        return vec![line.to_string()];
+    }
+    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+    let mut lines = Vec::new();
+    let mut current = indent.clone();
+    let mut empty = true;
+    for word in line.split_whitespace() {
+        let sep = if empty { 0 } else { 1 };
+        if !empty && current.chars().count() + sep + word.chars().count() > width {
+            lines.push(std::mem::replace(&mut current, indent.clone()));
+            empty = true;
+        }
+        if !empty {
+            current.push(' ');
+        }
+        current.push_str(word);
+        empty = false;
+    }
+    lines.push(current);
+    lines
+}
+
 /// Git's log date format ("Sun Jul 13 21:49:00 2026 +0000"). Threads
 /// timestamps are stored in UTC, so the offset is always +0000.
 pub fn date(ts: &Timestamp) -> String {

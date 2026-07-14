@@ -33,9 +33,11 @@ fn start_unix() -> Option<(Child, i32)> {
     if !std::io::stdout().is_terminal() {
         return None;
     }
-    // Lock in the color decision while stdout still is the terminal: what
-    // follows replaces it with a pipe, and less -R renders the colors.
+    // Lock in the color and width decisions while stdout still is the
+    // terminal: what follows replaces it with a pipe, and less -R renders
+    // the colors at that same width.
     let _ = crate::ui::Ui::auto();
+    let _ = crate::ui::text_width();
     let pager = pager_command()?;
 
     let mut command = Command::new("sh");
