@@ -16,14 +16,14 @@ Now:    crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
     148 │     let command = Cli::parse().command;
     149 │     if let Command::Mangen { out } = command {
 
-● bebce03de90b  Jane Doe <jane@example.com>  Fri Jul 3 08:25:40 2026 +0000
-  Piping output into `head` panics with a broken-pipe error (os error 32): println! panics
-  when stdout closes early. Standard fix is resetting SIGPIPE to default at startup (or
-  handling ErrorKind::BrokenPipe). Found while dogfooding `show | head`.
+comment bebce03de90b  Jane Doe <jane@example.com>  Fri Jul 3 08:25:40 2026 +0000
+    Piping output into `head` panics with a broken-pipe error (os error 32): println!
+    panics when stdout closes early. Standard fix is resetting SIGPIPE to default at
+    startup (or handling ErrorKind::BrokenPipe). Found while dogfooding `show | head`.
 
-↳ 825537036788  Jane Doe <jane@example.com>  Fri Jul 3 08:28:18 2026 +0000
-  Fixed in 0976b6f: SIGPIPE is reset to SIG_DFL at startup (unix only), so the process now
-  exits quietly with 141 when the downstream pipe closes. Verified with `show | head`.
+reply   825537036788  Jane Doe <jane@example.com>  Fri Jul 3 08:28:18 2026 +0000
+    Fixed in 0976b6f: SIGPIPE is reset to SIG_DFL at startup (unix only), so the process
+    now exits quietly with 141 when the downstream pipe closes. Verified with `show | head`.
 ```
 
 _The thread was pinned to line 94 at comment time; the code has since moved to line 146, and

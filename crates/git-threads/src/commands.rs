@@ -823,7 +823,7 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
     use std::fmt::Write;
     let mut out = String::new();
     for event in &folded.events {
-        let marker = if event.event.kind == EventKind::Reply { "↳" } else { "●" };
+        let kind = if event.event.kind == EventKind::Reply { "reply" } else { "comment" };
         let edited = if event.edited { format!(" {}", ui.dim("(edited)")) } else { String::new() };
         let draft = if thread.drafts.contains(&event.id) {
             format!(" {}", ui.yellow("(draft)"))
@@ -832,21 +832,20 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
         };
         writeln!(
             out,
-            "\n{} {}  {} {}  {}{edited}{draft}",
-            ui.cyan(marker),
-            ui.yellow(short(&event.id)),
+            "\n{}  {} {}  {}{edited}{draft}",
+            ui.yellow(format_args!("{kind:<7} {}", short(&event.id))),
             ui.bold(&event.event.author.name),
             ui.dim(format_args!("<{}>", event.event.author.email)),
             ui.dim(ui::date(&event.event.ts)),
         )
         .unwrap();
         if event.retracted {
-            writeln!(out, "  {}", ui.dim("[retracted]")).unwrap();
+            writeln!(out, "    {}", ui.dim("[retracted]")).unwrap();
         } else if let Some(body) = &event.effective_body {
-            let width = ui::text_width().map_or(usize::MAX, |w| w.saturating_sub(2).max(20));
+            let width = ui::text_width().map_or(usize::MAX, |w| w.saturating_sub(4).max(20));
             for line in body.lines() {
                 for line in ui::wrap(line, width) {
-                    writeln!(out, "  {line}").unwrap();
+                    writeln!(out, "    {line}").unwrap();
                 }
             }
         }
