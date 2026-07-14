@@ -356,6 +356,40 @@ fn list_filters_by_change_and_open_state() {
 }
 
 #[test]
+fn list_grep_searches_folded_bodies() {
+    let dir = setup_repo();
+    let path = dir.path();
+    let store = Store::open(path).unwrap();
+
+    let questions = commands::comment(&store, &opts("does this handle empty input?")).unwrap();
+    commands::reply(&store, questions.as_str(), "only for UTF-8 payloads").unwrap();
+    let retracted = commands::comment(&store, &opts("payloads look wrong")).unwrap();
+    commands::delete(&store, retracted.as_str()).unwrap();
+
+    let list = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .args(["list", "--oneline"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    // Case-insensitive, and replies count, not just the root.
+    let hit = list(&["--grep", "EMPTY input"]);
+    assert!(hit.contains("empty input"), "{hit}");
+    let via_reply = list(&["--grep", "utf-8"]);
+    assert!(via_reply.contains("empty input"), "{via_reply}");
+
+    // Retracted text no longer matches; the other thread still does.
+    let gone = list(&["--grep", "payloads"]);
+    assert!(gone.contains("empty input") && !gone.contains("look wrong"), "{gone}");
+    assert_eq!(list(&["--grep", "no such text"]).trim(), "no threads");
+}
+
+#[test]
 fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

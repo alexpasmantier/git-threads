@@ -174,7 +174,8 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 
 ```
 git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline]
-                 [-p | --stat] [-n <num>] [--author <who>] [--since <date>] [--until <date>]
+                 [-p | --stat] [-n <num>] [--author <who>] [--grep <text>]
+                 [--since <date>] [--until <date>]
 ```
 
 All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
@@ -214,7 +215,13 @@ The rest of git log's narrowing vocabulary applies to the thread's root comment:
 `-n <num>` / `--max-count` stops after that many threads, `--author <who>` keeps threads
 whose author matches (case-insensitive substring of name or email), and `--since` /
 `--until` bound the date the thread was started (ISO like `2026-07-01`, `yesterday`, or
-`"2 weeks ago"`).
+`"2 weeks ago"`). `--grep <text>` searches what people said: it keeps threads where any
+message's current text contains `<text>` (case-insensitive substring, like `--author`;
+retracted messages don't match). That makes the knowledge base retrievable:
+
+```console
+$ git threads list --grep "sigpipe"          # where did we discuss that?
+```
 
 ### `git threads show`
 

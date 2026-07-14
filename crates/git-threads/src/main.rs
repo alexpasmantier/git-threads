@@ -140,6 +140,9 @@ enum Command {
         /// Only threads whose root author matches (substring of name or email)
         #[arg(long)]
         author: Option<String>,
+        /// Only threads where some message contains this text (case-insensitive)
+        #[arg(long, value_name = "TEXT")]
+        grep: Option<String>,
         /// Only threads started after this date (ISO like 2026-07-01, or "2 weeks ago")
         #[arg(long)]
         since: Option<String>,
@@ -272,6 +275,7 @@ fn main() -> anyhow::Result<()> {
             stat,
             max_count,
             author,
+            grep,
             since,
             until,
         } => {
@@ -292,6 +296,7 @@ fn main() -> anyhow::Result<()> {
                     stat,
                     max_count,
                     author,
+                    grep,
                     since,
                     until,
                 },

@@ -529,6 +529,8 @@ pub struct ListOpts {
     pub max_count: Option<usize>,
     /// Substring of the root author's name or email, case-insensitive.
     pub author: Option<String>,
+    /// Substring of any message's current text, case-insensitive.
+    pub grep: Option<String>,
     /// Boundaries on the root comment's date, git log style.
     pub since: Option<String>,
     pub until: Option<String>,
@@ -581,6 +583,21 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 .map(|r| format!("{} <{}>", r.event.author.name, r.event.author.email))
                 .unwrap_or_default();
             if !author.to_lowercase().contains(&pattern.to_lowercase()) {
+                continue;
+            }
+        }
+        // Like the author filter, --grep is a case-insensitive substring
+        // match. It reads what a reader would see: current (folded) bodies,
+        // any message of the thread, retracted ones excluded.
+        if let Some(pattern) = &opts.grep {
+            let pattern = pattern.to_lowercase();
+            let matches = folded.events.iter().any(|e| {
+                !e.retracted
+                    && e.effective_body
+                        .as_deref()
+                        .is_some_and(|body| body.to_lowercase().contains(&pattern))
+            });
+            if !matches {
                 continue;
             }
         }
