@@ -633,11 +633,8 @@ pub fn list(
             };
             if !body.is_empty() {
                 println!();
-                let width = ui::text_width().map_or(usize::MAX, |w| w.saturating_sub(4).max(20));
                 for line in body.lines() {
-                    for line in ui::wrap(line, width) {
-                        println!("    {line}");
-                    }
+                    println!("    {line}");
                 }
             }
         }
@@ -842,11 +839,8 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
         if event.retracted {
             writeln!(out, "    {}", ui.dim("[retracted]")).unwrap();
         } else if let Some(body) = &event.effective_body {
-            let width = ui::text_width().map_or(usize::MAX, |w| w.saturating_sub(4).max(20));
             for line in body.lines() {
-                for line in ui::wrap(line, width) {
-                    writeln!(out, "    {line}").unwrap();
-                }
+                writeln!(out, "    {line}").unwrap();
             }
         }
     }
