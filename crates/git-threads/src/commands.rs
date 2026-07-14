@@ -513,22 +513,34 @@ pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
     Ok(())
 }
 
+pub struct ListOpts {
+    /// Only threads on this change — or, alone, on this path (grammar
+    /// mirrors `comment`).
+    pub target: Option<String>,
+    pub file: Option<String>,
+    /// Commit to re-anchor threads against.
+    pub at: String,
+    /// Keep only this resolution state.
+    pub resolved: Option<bool>,
+    pub oneline: bool,
+    pub patch: bool,
+    /// git log's -n: stop after this many threads.
+    pub max_count: Option<usize>,
+    /// Substring of the root author's name or email, case-insensitive.
+    pub author: Option<String>,
+    /// Boundaries on the root comment's date, git log style.
+    pub since: Option<String>,
+    pub until: Option<String>,
+}
+
 /// List threads in the current snapshot with their folded state and their
 /// re-anchor status against `at` (SPEC.md §4.2). `target`/`file` narrow to
 /// one change and one path (grammar mirrors `comment`, except a lone file
-/// filters across all changes); `resolved` keeps only that state.
-pub fn list(
-    store: &Store,
-    target: Option<&str>,
-    file: Option<&str>,
-    at: &str,
-    resolved: Option<bool>,
-    oneline: bool,
-    patch: bool,
-) -> Result<()> {
+/// filters across all changes).
+pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     let repo = store.repo();
     let mut threads = store.threads()?;
-    let (target, file) = match (target, file) {
+    let (target, file) = match (opts.target.as_deref(), opts.file.as_deref()) {
         (Some(spec), None) => resolve_list_filters(repo, &threads, spec)?,
         (target, file) => (target.map(String::from), file.map(String::from)),
     };
@@ -542,15 +554,38 @@ pub fn list(
         let lines = lines.map(parse_lines).transpose()?;
         threads.retain(|t| anchor_matches(&t.anchor, path, lines));
     }
-    let at_commit = resolve_commit(repo, at)?;
+    let at_commit = resolve_commit(repo, &opts.at)?;
+    let since = opts.since.as_deref().map(parse_date).transpose()?;
+    let until = opts.until.as_deref().map(parse_date).transpose()?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
     let ui = Ui::auto();
     let mut shown = 0;
     for thread in threads {
         let folded = fold_thread(thread.events.clone());
-        if resolved.is_some_and(|want| folded.resolved != want) {
+        if opts.resolved.is_some_and(|want| folded.resolved != want) {
             continue;
+        }
+        let root = folded.events.first();
+        if let Some(pattern) = &opts.author {
+            let author = root
+                .map(|r| format!("{} <{}>", r.event.author.name, r.event.author.email))
+                .unwrap_or_default();
+            if !author.to_lowercase().contains(&pattern.to_lowercase()) {
+                continue;
+            }
+        }
+        if since.is_some() || until.is_some() {
+            let Some(ts) = root.and_then(|r| r.event.ts.as_str().parse::<jiff::Timestamp>().ok())
+            else {
+                continue;
+            };
+            if since.is_some_and(|s| ts < s) || until.is_some_and(|u| ts > u) {
+                continue;
+            }
+        }
+        if opts.max_count.is_some_and(|n| shown >= n) {
+            break;
         }
         let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
         let mut deco =
@@ -569,11 +604,10 @@ pub fn list(
         let location = match (&thread.anchor.path, &thread.anchor.lines) {
             (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
             (Some(path), None) => path.clone(),
-            _ if oneline => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
+            _ if opts.oneline => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
             _ => "whole change".to_string(),
         };
-        let root = folded.events.first();
-        if oneline {
+        if opts.oneline {
             let drift = match &placement {
                 Reanchor::WholeCommit
                 | Reanchor::Located { status: ReanchorStatus::Exact, .. }
@@ -591,7 +625,7 @@ pub fn list(
                 .next()
                 .unwrap_or("");
             println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
-            if patch {
+            if opts.patch {
                 print!("{}", placement_snippet(ui, store, &thread.anchor, &placement, at_commit)?);
             }
         } else {
@@ -641,7 +675,7 @@ pub fn list(
                     println!("    {line}");
                 }
             }
-            if patch {
+            if opts.patch {
                 print!("{}", placement_snippet(ui, store, &thread.anchor, &placement, at_commit)?);
             }
         }
@@ -657,6 +691,45 @@ pub fn list(
 /// dim punctuation around already-colored parts.
 fn decorate(ui: Ui, parts: &[String]) -> String {
     format!("{}{}{}", ui.dim("("), parts.join(&ui.dim(", ")), ui.dim(")"))
+}
+
+/// Parse a --since/--until boundary, covering the shapes git dates are
+/// usually written in: an ISO timestamp, a date or datetime (local time),
+/// "yesterday", or "<n> <unit> ago" (seconds through years).
+fn parse_date(spec: &str) -> Result<jiff::Timestamp> {
+    let spec = spec.trim();
+    if let Ok(ts) = spec.parse::<jiff::Timestamp>() {
+        return Ok(ts);
+    }
+    let tz = jiff::tz::TimeZone::system();
+    if let Ok(dt) = spec.parse::<jiff::civil::DateTime>() {
+        return Ok(dt.to_zoned(tz)?.timestamp());
+    }
+    if let Ok(date) = spec.parse::<jiff::civil::Date>() {
+        return Ok(date.to_zoned(tz)?.timestamp());
+    }
+    let now = jiff::Zoned::now();
+    if spec == "yesterday" {
+        return Ok(now.checked_sub(jiff::Span::new().days(1))?.timestamp());
+    }
+    let words: Vec<&str> = spec.split_whitespace().collect();
+    if let [n, unit, rest @ ..] = words.as_slice()
+        && (rest.is_empty() || rest == ["ago"])
+        && let Ok(n) = n.parse::<i64>()
+    {
+        let span = match unit.trim_end_matches('s') {
+            "second" => jiff::Span::new().seconds(n),
+            "minute" => jiff::Span::new().minutes(n),
+            "hour" => jiff::Span::new().hours(n),
+            "day" => jiff::Span::new().days(n),
+            "week" => jiff::Span::new().weeks(n),
+            "month" => jiff::Span::new().months(n),
+            "year" => jiff::Span::new().years(n),
+            _ => bail!("cannot parse date {spec:?}"),
+        };
+        return Ok(now.checked_sub(span)?.timestamp());
+    }
+    bail!("cannot parse date {spec:?} (try ISO like 2026-07-01, or \"2 weeks ago\")")
 }
 
 /// The code snippet for a thread at `target`: from the re-anchored location

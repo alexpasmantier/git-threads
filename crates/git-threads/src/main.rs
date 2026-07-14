@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use git_threads::commands::{self, CommentOpts};
+use git_threads::commands::{self, CommentOpts, ListOpts};
 use git_threads::editor;
 use git_threads::store::Store;
 use git_threads_core::Side;
@@ -125,6 +125,18 @@ enum Command {
         /// Show each thread's code snippet, as `git log -p` shows patches
         #[arg(short, long)]
         patch: bool,
+        /// Limit the number of threads shown
+        #[arg(short = 'n', long = "max-count", value_name = "NUMBER")]
+        max_count: Option<usize>,
+        /// Only threads whose root author matches (substring of name or email)
+        #[arg(long)]
+        author: Option<String>,
+        /// Only threads started after this date (ISO like 2026-07-01, or "2 weeks ago")
+        #[arg(long)]
+        since: Option<String>,
+        /// Only threads started before this date
+        #[arg(long)]
+        until: Option<String>,
     },
     /// Generate man pages into a directory (for packaging)
     #[command(hide = true)]
@@ -233,13 +245,39 @@ fn main() -> anyhow::Result<()> {
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
-        Command::List { target, file, at, open, resolved, oneline, patch } => {
+        Command::List {
+            target,
+            file,
+            at,
+            open,
+            resolved,
+            oneline,
+            patch,
+            max_count,
+            author,
+            since,
+            until,
+        } => {
             let state = match (open, resolved) {
                 (true, _) => Some(false),
                 (_, true) => Some(true),
                 _ => None,
             };
-            commands::list(&store, target.as_deref(), file.as_deref(), &at, state, oneline, patch)
+            commands::list(
+                &store,
+                &ListOpts {
+                    target,
+                    file,
+                    at,
+                    resolved: state,
+                    oneline,
+                    patch,
+                    max_count,
+                    author,
+                    since,
+                    until,
+                },
+            )
         }
         Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }

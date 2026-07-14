@@ -174,6 +174,7 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 
 ```
 git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline] [-p]
+                 [-n <num>] [--author <who>] [--since <date>] [--until <date>]
 ```
 
 All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
@@ -205,6 +206,12 @@ a `Now:` field when the thread moved (`(relocated)` / `(fuzzy(f))` against `--at
 line — ID, decorations, location, first line of the root — the way `git log --oneline`
 does. `-p` / `--patch` appends each thread's code snippet (re-anchored against `--at`),
 the way `git log -p` appends patches; it composes with `--oneline`.
+
+The rest of git log's narrowing vocabulary applies to the thread's root comment:
+`-n <num>` / `--max-count` stops after that many threads, `--author <who>` keeps threads
+whose author matches (case-insensitive substring of name or email), and `--since` /
+`--until` bound the date the thread was started (ISO like `2026-07-01`, `yesterday`, or
+`"2 weeks ago"`).
 
 ### `git threads show`
 
