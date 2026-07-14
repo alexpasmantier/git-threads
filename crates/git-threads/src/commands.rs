@@ -580,7 +580,10 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
         if opts.resolved.is_some_and(|want| folded.resolved != want) {
             continue;
         }
-        let root = folded.events.first();
+        // The actual root comment: a same-second reply can tie-break ahead
+        // of it in display order, so don't just take the first.
+        let root =
+            folded.events.iter().find(|e| e.id == thread.id).or_else(|| folded.events.first());
         if let Some(pattern) = &opts.author {
             let author = root
                 .map(|r| format!("{} <{}>", r.event.author.name, r.event.author.email))
