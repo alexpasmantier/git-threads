@@ -5,8 +5,8 @@ Code comments document code. Commit messages document diffs — but only as a wh
 ```text
 $ git threads show bebce03de90b
 thread bebce03de90bc053e93673edfce384fe1850da51 (resolved)
-on crates/git-threads/src/main.rs:94-94 of 1a5ef68157e9..73e0f8733413
-now crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
+Anchor: crates/git-threads/src/main.rs:94-94 of 1a5ef68157e9..73e0f8733413
+Now:    crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
 
     143 │     }
     144 │ }
@@ -16,12 +16,12 @@ now crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
     148 │     let command = Cli::parse().command;
     149 │     if let Command::Mangen { out } = command {
 
-● bebce03de90b  Jane Doe <jane@example.com>  2026-07-03
+● bebce03de90b  Jane Doe <jane@example.com>  Fri Jul 3 08:25:40 2026 +0000
   Piping output into `head` panics with a broken-pipe error (os error 32): println! panics
   when stdout closes early. Standard fix is resetting SIGPIPE to default at startup (or
   handling ErrorKind::BrokenPipe). Found while dogfooding `show | head`.
 
-↳ 825537036788  Jane Doe <jane@example.com>  2026-07-03
+↳ 825537036788  Jane Doe <jane@example.com>  Fri Jul 3 08:28:18 2026 +0000
   Fixed in 0976b6f: SIGPIPE is reset to SIG_DFL at startup (unix only), so the process now
   exits quietly with 141 when the downstream pipe closes. Verified with `show | head`.
 ```

@@ -523,6 +523,7 @@ pub fn list(
     file: Option<&str>,
     at: &str,
     resolved: Option<bool>,
+    oneline: bool,
 ) -> Result<()> {
     let repo = store.repo();
     let mut threads = store.threads()?;
@@ -544,86 +545,108 @@ pub fn list(
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
     let ui = Ui::auto();
-    struct Row {
-        glyph: String,
-        id: String,
-        location: String,
-        /// Display width of `location`, which may carry invisible color codes.
-        width: usize,
-        title: String,
-        meta: String,
-    }
-    let mut rows: Vec<Row> = Vec::new();
+    let mut shown = 0;
     for thread in threads {
         let folded = fold_thread(thread.events.clone());
         if resolved.is_some_and(|want| folded.resolved != want) {
             continue;
         }
-        let glyph = if folded.resolved { ui.magenta("✓") } else { ui.green("●") };
-        let location = match (&thread.anchor.path, &thread.anchor.lines) {
-            (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
-            (Some(path), None) => path.clone(),
-            _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
-        };
-        let placement = match reanchor::reanchor(store, &thread.anchor, at_commit)? {
-            Reanchor::WholeCommit | Reanchor::Located { status: ReanchorStatus::Exact, .. } => {
-                String::new()
-            }
-            Reanchor::Located { path, lines, status } => {
-                let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-                format!(" → {path}{lines} ({status})")
-            }
-            Reanchor::Outdated => " (outdated)".to_string(),
-        };
-        let width = location.chars().count() + placement.chars().count();
-        let placement = match &placement {
-            p if p.is_empty() => placement,
-            p if p.ends_with("(outdated)") => ui.red(p),
-            p => ui.yellow(p),
-        };
-        let title = folded
-            .events
-            .first()
-            .and_then(|root| root.effective_body.as_deref())
-            .unwrap_or("")
-            .lines()
-            .next()
-            .unwrap_or("")
-            .to_string();
-        let mut meta = Vec::new();
+        let mut deco =
+            vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
         if folded.events.len() > 1 {
-            meta.push(ui.dim(format_args!("{} messages", folded.events.len())));
+            deco.push(ui.dim(format_args!("{} messages", folded.events.len())));
         }
         if !thread.drafts.is_empty() {
             let n = thread.drafts.len();
-            meta.push(ui.yellow(format_args!("{n} draft{}", if n == 1 { "" } else { "s" })));
+            deco.push(ui.yellow(format_args!("{n} draft{}", if n == 1 { "" } else { "s" })));
         }
-        rows.push(Row {
-            glyph,
-            id: ui.yellow(short(&thread.id)),
-            location: format!("{location}{placement}"),
-            width,
-            title,
-            meta: meta.join(&ui.dim(" · ")),
-        });
-    }
-    if rows.is_empty() {
-        println!("{}", ui.dim("no threads"));
-        return Ok(());
-    }
-    let column = rows.iter().map(|r| r.width).max().unwrap_or(0);
-    for row in rows {
-        let pad = " ".repeat(column - row.width);
-        let mut line = format!("{} {}  {}{pad}", row.glyph, row.id, row.location);
-        for part in [row.title, row.meta] {
-            if !part.is_empty() {
-                line.push_str("  ");
-                line.push_str(&part);
+        let decoration = decorate(ui, &deco);
+        let location = match (&thread.anchor.path, &thread.anchor.lines) {
+            (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
+            (Some(path), None) => path.clone(),
+            _ if oneline => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
+            _ => "whole change".to_string(),
+        };
+        let placement = reanchor::reanchor(store, &thread.anchor, at_commit)?;
+        let root = folded.events.first();
+        if oneline {
+            let drift = match &placement {
+                Reanchor::WholeCommit
+                | Reanchor::Located { status: ReanchorStatus::Exact, .. } => String::new(),
+                Reanchor::Located { path, lines, status } => {
+                    let lines =
+                        lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+                    ui.yellow(format_args!(" → {path}{lines} ({status})"))
+                }
+                Reanchor::Outdated => ui.red(" (outdated)"),
+            };
+            let title = root
+                .and_then(|r| r.effective_body.as_deref())
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("");
+            println!("{} {decoration} {location}{drift}  {title}", ui.yellow(short(&thread.id)));
+        } else {
+            if shown > 0 {
+                println!();
+            }
+            println!("{} {decoration}", ui.yellow(format_args!("thread {}", thread.id)));
+            if let Some(root) = root {
+                println!(
+                    "Author: {} {}",
+                    ui.bold(&root.event.author.name),
+                    ui.dim(format_args!("<{}>", root.event.author.email))
+                );
+                println!("Date:   {}", ui::date(&root.event.ts));
+            }
+            println!(
+                "Anchor: {} {}",
+                ui.bold(&location),
+                ui.dim(format_args!(
+                    "of {}..{}",
+                    &thread.anchor.diff.base.as_str()[..12],
+                    &thread.anchor.diff.head.as_str()[..12]
+                ))
+            );
+            match &placement {
+                Reanchor::WholeCommit
+                | Reanchor::Located { status: ReanchorStatus::Exact, .. } => {}
+                Reanchor::Located { path, lines, status } => {
+                    let lines =
+                        lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
+                    println!(
+                        "Now:    {} {}",
+                        ui.bold(format_args!("{path}{lines}")),
+                        ui.yellow(format_args!("({status})"))
+                    );
+                }
+                Reanchor::Outdated => println!("Now:    {}", ui.red("(outdated)")),
+            }
+            let body = match root {
+                Some(root) if root.retracted => ui.dim("[retracted]"),
+                Some(root) => root.effective_body.clone().unwrap_or_default(),
+                None => String::new(),
+            };
+            if !body.is_empty() {
+                println!();
+                for line in body.lines() {
+                    println!("    {line}");
+                }
             }
         }
-        println!("{}", line.trim_end());
+        shown += 1;
+    }
+    if shown == 0 {
+        println!("{}", ui.dim("no threads"));
     }
     Ok(())
+}
+
+/// A git-log-style decoration list — `(open, 2 messages, 1 draft)` — with
+/// dim punctuation around already-colored parts.
+fn decorate(ui: Ui, parts: &[String]) -> String {
+    format!("{}{}{}", ui.dim("("), parts.join(&ui.dim(", ")), ui.dim(")"))
 }
 
 /// Sort out `list`'s lone positional: a change (commit or range) or a path
@@ -693,12 +716,26 @@ fn range_commits(
 /// comment/reply in it.
 pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
     let (thread, _) = find_message(store, prefix)?;
+    print!("{}", render_thread(Ui::auto(), store, &thread, at)?);
+    Ok(())
+}
+
+/// The full thread as `show` prints it: header, re-anchor placement, code
+/// context, conversation.
+fn render_thread(ui: Ui, store: &Store, thread: &ThreadRecord, at: &str) -> Result<String> {
+    use std::fmt::Write;
     let folded = fold_thread(thread.events.clone());
     let anchor = &thread.anchor;
-    let ui = Ui::auto();
+    let mut out = String::new();
 
-    let status = if folded.resolved { ui.magenta("(resolved)") } else { ui.green("(open)") };
-    println!("{} {status}", ui.yellow(format_args!("thread {}", thread.id)));
+    let status = if folded.resolved { ui.magenta("resolved") } else { ui.green("open") };
+    writeln!(
+        out,
+        "{} {}",
+        ui.yellow(format_args!("thread {}", thread.id)),
+        decorate(ui, &[status])
+    )
+    .unwrap();
     let side = match anchor.side {
         Some(Side::Old) => ui.dim(" (old side)"),
         _ => String::new(),
@@ -708,15 +745,17 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
         (Some(path), None) => path.clone(),
         _ => "whole change".to_string(),
     };
-    println!(
-        "on {}{side} {}",
+    writeln!(
+        out,
+        "Anchor: {}{side} {}",
         ui.bold(location),
         ui.dim(format_args!(
             "of {}..{}",
             &anchor.diff.base.as_str()[..12],
             &anchor.diff.head.as_str()[..12]
         ))
-    );
+    )
+    .unwrap();
 
     let target = resolve_commit(store.repo(), at)?;
     let target_short = &target.to_string()[..12];
@@ -731,33 +770,41 @@ pub fn show(store: &Store, prefix: &str, at: &str) -> Result<()> {
                 let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
                 let status = format!("({status})");
                 let status = if exact { ui.green(status) } else { ui.yellow(status) };
-                println!(
-                    "now {} at {target_short} {status}",
+                writeln!(
+                    out,
+                    "Now:    {} at {target_short} {status}",
                     ui.bold(format_args!("{path}{lines}"))
-                );
+                )
+                .unwrap();
             }
         }
         Reanchor::Outdated => {
-            println!("{} at {target_short}: showing the anchor's own context", ui.red("outdated"));
+            writeln!(
+                out,
+                "Now:    {} at {target_short} {}",
+                ui.red("(outdated)"),
+                ui.dim("— showing the anchor's own context")
+            )
+            .unwrap();
         }
     }
 
     match &placement {
         Reanchor::Located { path, lines: Some(lines), .. } => {
             if let Some(blob) = reanchor::blob_at(store.repo(), target, path)? {
-                print_snippet(ui, &reanchor::blob_content(store.repo(), blob)?, *lines);
+                out.push_str(&render_snippet(ui, &reanchor::blob_content(store.repo(), blob)?, *lines));
             }
         }
         _ => {
             if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
                 let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
-                print_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines);
+                out.push_str(&render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines));
             }
         }
     }
 
-    print!("{}", render_conversation(ui, &thread, &folded));
-    Ok(())
+    out.push_str(&render_conversation(ui, thread, &folded));
+    Ok(out)
 }
 
 /// The conversation as `show` prints it: one block per message, blank-line
@@ -780,7 +827,7 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
             ui.yellow(short(&event.id)),
             ui.bold(&event.event.author.name),
             ui.dim(format_args!("<{}>", event.event.author.email)),
-            ui.dim(ui::when(&event.event.ts)),
+            ui.dim(ui::date(&event.event.ts)),
         )
         .unwrap();
         if event.retracted {
@@ -794,22 +841,11 @@ fn render_conversation(ui: Ui, thread: &ThreadRecord, folded: &FoldedThread) -> 
     out
 }
 
-/// A compact rendering of a thread — id, status, location, conversation —
-/// for the editor hint when `reply` runs without --message.
+/// The full thread as `show` renders it, uncolored, for the editor hint
+/// when `reply` runs without --message.
 pub fn thread_preview(store: &Store, prefix: &str) -> Result<String> {
     let (thread, _) = find_message(store, prefix)?;
-    let folded = fold_thread(thread.events.clone());
-    let status = if folded.resolved { "resolved" } else { "open" };
-    let location = match (&thread.anchor.path, &thread.anchor.lines) {
-        (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
-        (Some(path), None) => path.clone(),
-        _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
-    };
-    Ok(format!(
-        "replying to thread {}  [{status}]  on {location}{}",
-        short(&thread.id),
-        render_conversation(Ui::plain(), &thread, &folded)
-    ))
+    Ok(format!("replying to:\n\n{}", render_thread(Ui::plain(), store, &thread, "HEAD")?))
 }
 
 /// Discard one drafted event before publishing. Discarding a drafted
@@ -855,46 +891,48 @@ pub fn discard_all(store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// Print a marked, line-numbered snippet of `lines` out of `content`.
-/// Context lines are dimmed so the target lines carry the eye.
-fn print_snippet(ui: Ui, content: &str, lines: LineRange) {
+/// A marked, line-numbered snippet of `lines` out of `content`, preceded by
+/// a blank line. Context lines are dimmed so the target lines carry the eye.
+fn render_snippet(ui: Ui, content: &str, lines: LineRange) -> String {
+    use std::fmt::Write;
     let Some(snippet) = derive_snippet(content, lines) else {
-        return;
+        return String::new();
     };
-    println!();
-    let print_line = |line_no: &mut u32, line: &str, marked: bool| {
+    let mut out = String::from("\n");
+    let push_line = |out: &mut String, line_no: &mut u32, line: &str, marked: bool| {
         let gutter = ui.dim(format_args!("{line_no:>5} │"));
         if marked {
-            println!("{} {gutter} {line}", ui.cyan(">"));
+            writeln!(out, "{} {gutter} {line}", ui.cyan(">")).unwrap();
         } else {
-            println!("  {gutter} {}", ui.dim(line));
+            writeln!(out, "  {gutter} {}", ui.dim(line)).unwrap();
         }
         *line_no += 1;
     };
     let mut line_no = snippet.first_line;
     for line in &snippet.before {
-        print_line(&mut line_no, line, false);
+        push_line(&mut out, &mut line_no, line, false);
     }
     match &snippet.target {
         SnippetTarget::Full(lines) => {
             for line in lines {
-                print_line(&mut line_no, line, true);
+                push_line(&mut out, &mut line_no, line, true);
             }
         }
         SnippetTarget::Truncated { head, tail, omitted, .. } => {
             for line in head {
-                print_line(&mut line_no, line, true);
+                push_line(&mut out, &mut line_no, line, true);
             }
-            println!("        {}", ui.dim(format_args!("⋮ {omitted} lines omitted")));
+            writeln!(out, "        {}", ui.dim(format_args!("⋮ {omitted} lines omitted"))).unwrap();
             line_no += *omitted as u32;
             for line in tail {
-                print_line(&mut line_no, line, true);
+                push_line(&mut out, &mut line_no, line, true);
             }
         }
     }
     for line in &snippet.after {
-        print_line(&mut line_no, line, false);
+        push_line(&mut out, &mut line_no, line, false);
     }
+    out
 }
 
 /// Fetch the remote's threads data into the tracking ref and integrate it

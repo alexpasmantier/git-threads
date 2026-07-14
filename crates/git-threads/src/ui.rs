@@ -59,24 +59,11 @@ impl Ui {
     }
 }
 
-/// A human date: relative while recent ("20 minutes ago"), the plain date
-/// once relative stops being meaningful.
-pub fn when(ts: &Timestamp) -> String {
-    let Ok(then) = ts.as_str().parse::<jiff::Timestamp>() else {
-        return ts.to_string();
-    };
-    let secs = jiff::Timestamp::now().duration_since(then).as_secs();
-    let plural = |n: i64, unit: &str| format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
-    if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3_600 {
-        plural(secs / 60, "minute")
-    } else if secs < 86_400 {
-        plural(secs / 3_600, "hour")
-    } else if secs < 604_800 {
-        plural(secs / 86_400, "day")
-    } else {
-        // The ISO form is `YYYY-MM-DDThh:mm:ssZ`; the date is its first 10 bytes.
-        ts.as_str()[..10].to_string()
+/// Git's log date format ("Sun Jul 13 21:49:00 2026 +0000"). Threads
+/// timestamps are stored in UTC, so the offset is always +0000.
+pub fn date(ts: &Timestamp) -> String {
+    match ts.as_str().parse::<jiff::Timestamp>() {
+        Ok(t) => t.strftime("%a %b %-d %H:%M:%S %Y +0000").to_string(),
+        Err(_) => ts.to_string(),
     }
 }

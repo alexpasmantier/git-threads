@@ -119,6 +119,9 @@ enum Command {
         /// Only resolved threads
         #[arg(long, conflicts_with = "open")]
         resolved: bool,
+        /// One line per thread instead of the full block
+        #[arg(long)]
+        oneline: bool,
     },
     /// Generate man pages into a directory (for packaging)
     #[command(hide = true)]
@@ -224,13 +227,13 @@ fn main() -> anyhow::Result<()> {
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
-        Command::List { target, file, at, open, resolved } => {
+        Command::List { target, file, at, open, resolved, oneline } => {
             let state = match (open, resolved) {
                 (true, _) => Some(false),
                 (_, true) => Some(true),
                 _ => None,
             };
-            commands::list(&store, target.as_deref(), file.as_deref(), &at, state)
+            commands::list(&store, target.as_deref(), file.as_deref(), &at, state, oneline)
         }
         Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }

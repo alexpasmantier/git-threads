@@ -169,7 +169,7 @@ at `commit`.
 ### `git threads list`
 
 ```
-git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved]
+git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--oneline]
 ```
 
 All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
@@ -193,11 +193,13 @@ $ git threads list src/parser.rs            # every discussion this file ever ha
 $ git threads list src/ --resolved          # settled questions under src/
 ```
 
-Each thread prints newest first, one aligned line: state glyph (`●` open, `✓` resolved), ID,
-anchor location, re-anchored placement against `--at` (default `HEAD`;
-`→ path:lines (relocated|fuzzy(f))`, `(outdated)`, or nothing when the anchor still matches
-exactly), the first line of the root comment, and — when there's more than one message or a
-draft — the counts.
+Threads print newest first as `git log`-style blocks: a `thread <id>` header with
+decorations (`open`/`resolved`, message and draft counts when they say something),
+`Author:` / `Date:` / `Anchor:` fields, a `Now:` field when the thread drifted against
+`--at` (default `HEAD`; `(relocated)`, `(fuzzy(f))`, `(outdated)` — omitted when the anchor
+still matches exactly), and the root comment indented below. `--oneline` compresses each
+thread to one line — ID, decorations, location, first line of the root — the way
+`git log --oneline` does.
 
 ### `git threads show`
 
@@ -208,7 +210,7 @@ git threads show <thread-or-message> [--at <commit>]
 One thread in full: the anchor and its diff, where the thread lands on `--at` per the
 re-anchoring ladder, the code snippet (from the re-anchored location, or from the original
 diff when outdated), and the folded conversation — each message with its ID, author,
-date (relative while recent), and `(edited)` / `(draft)` / `[retracted]` markers.
+date, and `(edited)` / `(draft)` / `[retracted]` markers.
 
 ## Sharing
 
