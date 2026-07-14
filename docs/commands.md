@@ -16,6 +16,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | [`discard`](#git-threads-discard) | removes a drafted event before it's shared (`--all` for every draft) |
 | [`list`](#git-threads-list) | all threads — or one change's — with their re-anchor status against your current code |
 | [`show`](#git-threads-show) | one thread: its code context (re-anchored) and conversation |
+| [`status`](#git-threads-status) | what's drafted and what hasn't been pushed |
 | [`commit`](#git-threads-commit) | seals everything you've drafted into local history, as one batch |
 | [`push`](#git-threads-push) | shares your local discussion history (the fetch–union–push loop) |
 | [`pull`](#git-threads-pull) | fetches and integrates other people's discussion data |
@@ -242,6 +243,28 @@ snapshot annotations show the annotated file excerpt. `-p` expands to the full p
 ## Sharing
 
 The rhythm is git's own: `commit` records locally, `push` shares, `pull` receives.
+
+### `git threads status`
+
+```
+git threads status
+```
+
+Where you are in that cycle, the way `git status` answers it for the working tree: every
+drafted event (kind, ID, where it goes, the first line of what it says) and, per remote,
+how many sealed events haven't been pushed. All clean prints
+`nothing drafted` / `up to date with origin`.
+
+```console
+$ git threads status
+2 drafted events in 2 threads (git threads commit to seal, discard to drop):
+  comment 84727c6d0f7c  src/parser.rs:120-128  does this handle empty input?
+  resolve 3f2a1b9c8d7e  thread bebce03de90b
+1 event not yet on origin (git threads push to share)
+```
+
+Unpushed counts compare your data against the remote's as of its last fetch, like
+`git status` against a tracking branch.
 
 ### `git threads commit`
 

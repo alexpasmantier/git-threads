@@ -209,6 +209,41 @@ fn init_refspec_never_clobbers_unpublished_local_data() {
 }
 
 #[test]
+fn status_tracks_the_draft_commit_push_cycle() {
+    let (_root, alice, _bob) = setup();
+    let store = Store::open(&alice).unwrap();
+    let status = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(&alice)
+            .arg("status")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let clean = status();
+    assert!(clean.contains("nothing drafted"), "{clean}");
+    assert!(clean.contains("up to date with origin"), "{clean}");
+
+    let thread_id = comment(&store, "does three need to be a string?");
+    commands::reply(&store, thread_id.as_str(), "asking for a friend").unwrap();
+    let drafted = status();
+    assert!(drafted.contains("2 drafted events in 1 thread"), "{drafted}");
+    assert!(drafted.contains("does three need to be a string?"), "{drafted}");
+    assert!(drafted.contains(&format!("thread {}", &thread_id.as_str()[..12])), "{drafted}");
+
+    commands::commit(&store).unwrap();
+    let sealed = status();
+    assert!(sealed.contains("nothing drafted"), "{sealed}");
+    assert!(sealed.contains("2 events not yet on origin"), "{sealed}");
+
+    commands::push(&store, "origin").unwrap();
+    let pushed = status();
+    assert!(pushed.contains("up to date with origin"), "{pushed}");
+}
+
+#[test]
 fn pull_from_empty_remote_is_graceful() {
     let (_root, alice, _bob) = setup();
     let alice_store = Store::open(&alice).unwrap();

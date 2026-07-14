@@ -1188,6 +1188,88 @@ fn render_snippet(ui: Ui, content: &str, lines: LineRange) -> String {
     out
 }
 
+/// The threads counterpart of `git status`: what's drafted (awaiting
+/// `commit`) and what's sealed locally but not yet on each remote (awaiting
+/// `push`). Unpushed counts compare snapshots, not commit graphs — content
+/// addressing makes event sets directly comparable across refs.
+pub fn status(store: &Store) -> Result<()> {
+    let ui = Ui::auto();
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut draft_threads = 0usize;
+    for thread in store.threads()? {
+        if thread.drafts.is_empty() {
+            continue;
+        }
+        draft_threads += 1;
+        let location = match (&thread.anchor.path, &thread.anchor.lines) {
+            (Some(path), Some(l)) => format!("{path}:{}-{}", l.start, l.end),
+            (Some(path), None) => path.clone(),
+            _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
+        };
+        let mut drafted: Vec<&(EventId, Event)> =
+            thread.events.iter().filter(|(id, _)| thread.drafts.contains(id)).collect();
+        drafted.sort_by_key(|(id, event)| (event.ts.clone(), id.clone()));
+        for (id, event) in drafted {
+            // A drafted root gets the anchor location; later events point at
+            // their thread, the way the conversation view labels them.
+            let context = if *id == thread.id {
+                location.clone()
+            } else {
+                format!("thread {}", short(&thread.id))
+            };
+            let kind = String::from(event.kind.clone());
+            let mut line =
+                format!("  {}  {context}", ui.yellow(format_args!("{kind:<7} {}", short(id))));
+            if let Some(first) = event.body.as_deref().and_then(|b| b.lines().next()) {
+                line.push_str(&format!("  {}", ui.dim(first)));
+            }
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        println!("nothing drafted");
+    } else {
+        println!(
+            "{} drafted event{} in {} thread{} {}:",
+            lines.len(),
+            if lines.len() == 1 { "" } else { "s" },
+            draft_threads,
+            if draft_threads == 1 { "" } else { "s" },
+            ui.dim("(git threads commit to seal, discard to drop)")
+        );
+        for line in &lines {
+            println!("{line}");
+        }
+    }
+
+    let local = match store.tip()? {
+        Some(tip) => store.event_ids(tip)?,
+        None => Default::default(),
+    };
+    let workdir = workdir(store)?;
+    for remote in git(&workdir, &["remote"])?.lines() {
+        let unpushed = match store.tracking_tip(remote)? {
+            Some(tracking) => {
+                let known = store.event_ids(tracking)?;
+                local.difference(&known).count()
+            }
+            // Never fetched from this remote: everything sealed is unshared.
+            None => local.len(),
+        };
+        if unpushed == 0 {
+            println!("up to date with {remote}");
+        } else {
+            println!(
+                "{unpushed} event{} not yet on {remote} {}",
+                if unpushed == 1 { "" } else { "s" },
+                ui.dim("(git threads push to share)")
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Fetch the remote's threads data into the tracking ref and integrate it
 /// into the local ref (SPEC.md §7.2 steps 1–2).
 pub fn pull(store: &Store, remote: &str) -> Result<()> {
@@ -1226,12 +1308,13 @@ pub fn push(store: &Store, remote: &str) -> Result<()> {
     const MAX_ATTEMPTS: usize = 5;
     for attempt in 1..=MAX_ATTEMPTS {
         fetch_and_integrate(store, remote)?;
-        if store.tip()?.is_none() {
+        let Some(tip) = store.tip()? else {
             println!("nothing to push");
             return Ok(());
-        }
+        };
         match git(&workdir, &["push", remote, "refs/threads/data:refs/threads/data"]) {
             Ok(_) => {
+                store.record_pushed_tip(remote, tip)?;
                 println!("pushed to {remote}");
                 return Ok(());
             }

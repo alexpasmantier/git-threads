@@ -481,6 +481,35 @@ impl Store {
         }
     }
 
+    /// IDs of every event in the snapshot at `tip`. Content addressing makes
+    /// these sets comparable across refs: what's on one snapshot and not
+    /// another is exactly the difference (used by `status`).
+    pub fn event_ids(&self, tip: ObjectId) -> Result<BTreeSet<EventId>> {
+        let mut out = BTreeSet::new();
+        let tree = self.repo.find_commit(tip)?.tree()?;
+        let Some(threads_tree) = self.subtree(&tree, "threads")? else {
+            return Ok(out);
+        };
+        for shard_entry in threads_tree.iter() {
+            let shard_tree = self.repo.find_tree(shard_entry?.object_id())?;
+            for thread_entry in shard_tree.iter() {
+                let dir = self.repo.find_tree(thread_entry?.object_id())?;
+                let Some(events_tree) = self.subtree(&dir, "events")? else {
+                    continue;
+                };
+                for entry in events_tree.iter() {
+                    let entry = entry?;
+                    let name = std::str::from_utf8(entry.filename())
+                        .context("non-UTF-8 event filename")?;
+                    if let Some(stem) = name.strip_suffix(".json") {
+                        out.insert(EventId::from_hex(stem)?);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// `(anchor files, event files, thread dirs with events)` under `threads/`.
     fn tree_stats(&self, tree_id: ObjectId) -> Result<(usize, usize, usize)> {
         let tree = self.repo.find_tree(tree_id)?;
@@ -567,6 +596,21 @@ impl Store {
     /// Tip of the tracking ref for `remote`, if present.
     pub fn tracking_tip(&self, remote: &str) -> Result<Option<ObjectId>> {
         self.ref_tip(&Self::tracking_ref(remote))
+    }
+
+    /// After a successful push, the remote is known to hold `tip`: record it
+    /// on the tracking ref, the way git updates remote-tracking branches on
+    /// push. Keeps `status` honest without waiting for the next fetch.
+    pub fn record_pushed_tip(&self, remote: &str, tip: ObjectId) -> Result<()> {
+        self.repo
+            .reference(
+                Store::tracking_ref(remote),
+                tip,
+                PreviousValue::Any,
+                "git-threads: record pushed tip",
+            )
+            .with_context(|| format!("failed to update {}", Store::tracking_ref(remote)))?;
+        Ok(())
     }
 
     /// Integrate a fetched remote tip into `refs/threads/data` (SPEC.md §7.2

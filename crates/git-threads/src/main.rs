@@ -95,6 +95,8 @@ enum Command {
         #[arg(long, conflicts_with = "event")]
         all: bool,
     },
+    /// Show what's drafted and what hasn't been pushed
+    Status,
     /// Fetch and integrate threads data from a remote
     Pull {
         /// Remote to pull from
@@ -261,6 +263,7 @@ fn main() -> anyhow::Result<()> {
             };
             commands::show(&store, &thread, &at, mode)
         }
+        Command::Status => commands::status(&store),
         Command::Pull { remote } => commands::pull(&store, &remote),
         Command::Commit => commands::commit(&store),
         Command::Push { remote } => commands::push(&store, &remote),
