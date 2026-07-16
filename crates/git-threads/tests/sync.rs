@@ -189,7 +189,7 @@ fn init_refspec_never_clobbers_unpublished_local_data() {
     commands::init(&alice_store, "origin").unwrap();
     let refspecs = git(&alice, &["config", "--get-all", "remote.origin.fetch"]);
     assert!(
-        refspecs.contains("+refs/threads/data:refs/threads/remotes/origin/data"),
+        refspecs.contains("+refs/threads/data*:refs/threads/remotes/origin/data*"),
         "init writes the tracking refspec, got: {refspecs}"
     );
 
@@ -305,6 +305,46 @@ fn inbox_tracks_new_activity_across_clones() {
     let everything = run(&bob, &["list", "--new", "--oneline"]);
     assert!(everything.contains(&first.as_str()[..12]), "{everything}");
     assert!(run(&bob, &["seen", "--undo"]).contains("nothing to undo"));
+}
+
+#[test]
+fn init_before_any_threads_data_keeps_plain_fetch_working() {
+    let (_root, alice, bob) = setup();
+    let alice_store = Store::open(&alice).unwrap();
+
+    // No one has pushed threads data yet; a plain fetch must still succeed
+    // (an exact refspec would make git fail on the missing remote ref).
+    commands::init(&alice_store, "origin").unwrap();
+    git(&alice, &["fetch", "-q", "origin"]);
+
+    // Once data appears, the same configured refspec picks it up.
+    let bob_store = Store::open(&bob).unwrap();
+    comment(&bob_store, "first thread");
+    commands::commit(&bob_store).unwrap();
+    commands::push(&bob_store, "origin").unwrap();
+    git(&alice, &["fetch", "-q", "origin"]);
+    commands::integrate_fetched(&alice_store).unwrap();
+    assert_eq!(alice_store.threads().unwrap().len(), 1);
+}
+
+#[test]
+fn init_migrates_legacy_exact_refspec() {
+    let (_root, alice, _bob) = setup();
+    let store = Store::open(&alice).unwrap();
+    git(
+        &alice,
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/threads/data:refs/threads/remotes/origin/data",
+        ],
+    );
+    commands::init(&store, "origin").unwrap();
+    let refspecs = git(&alice, &["config", "--get-all", "remote.origin.fetch"]);
+    assert!(!refspecs.contains("+refs/threads/data:"), "legacy refspec removed: {refspecs}");
+    assert!(refspecs.contains("+refs/threads/data*:"), "glob refspec added: {refspecs}");
+    git(&alice, &["fetch", "-q", "origin"]);
 }
 
 #[test]

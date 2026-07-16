@@ -175,10 +175,10 @@ Do not pre-compress or binary-encode anything: git packfiles (zlib + delta chain
 `init` adds a single fetch refspec to the shared remote:
 
 ```
-fetch = +refs/threads/data:refs/threads/remotes/<remote>/data
+fetch = +refs/threads/data*:refs/threads/remotes/<remote>/data*
 ```
 
-Fetch refspecs are additive, so this augments normal fetches. Two deliberate asymmetries:
+Fetch refspecs are additive, so this augments normal fetches. The glob form is required: git treats a configured *exact* refspec as mandatory and fails the whole fetch when the ref is missing, so the exact form would break plain `git fetch` until the remote has threads data. A glob that matches nothing is silently skipped. Two deliberate asymmetries:
 
 - **Remote state lands in a tracking ref, never directly on `refs/threads/data`.** A direct `+refs/threads/*:refs/threads/*` mapping would let any fetch force-overwrite the local ref, making unpublished local events unreachable. Integration into the local ref is a separate step under the tool's control (§7.2): fast-forward when possible, union merge otherwise — exactly git's own branch/tracking-ref model. Unlike a branch merge, it can never conflict and never discards local events, so clients SHOULD run it opportunistically (e.g. before every command) — after `init`, a plain `git fetch` is all it takes for new data to appear. The tracking ref lives under the format's own namespace (not `refs/remotes/*`, which a branch named `threads/data` could collide with).
 - **No push refspec is configured**: setting `remote.<name>.push` *replaces* git's default push behavior for the clone (a bare `git push` would stop pushing the current branch). Publishing instead pushes explicitly — `git push <remote> refs/threads/data:refs/threads/data` — as part of the publish loop (§7.2).

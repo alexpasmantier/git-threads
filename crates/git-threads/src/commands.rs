@@ -15,7 +15,16 @@ use std::process::Command;
 /// The fetch refspec `init` configures (SPEC.md §7.1): remote state lands in
 /// the tracking ref, never directly on `refs/threads/data` — a direct mapping
 /// would let any fetch clobber the local ref, orphaning unpublished events.
+/// The glob matters: git errors on a configured exact refspec whose ref is
+/// missing, so the exact form breaks plain `git fetch` until the remote has
+/// threads data. A glob that matches nothing is silently skipped.
 fn fetch_refspec(remote: &str) -> String {
+    format!("+refs/threads/data*:{}*", Store::tracking_ref(remote))
+}
+
+/// The exact-form refspec older versions of `init` wrote (see above for why
+/// it was replaced). `init` and `deinit` still remove it.
+fn legacy_fetch_refspec(remote: &str) -> String {
     format!("+refs/threads/data:{}", Store::tracking_ref(remote))
 }
 
@@ -33,8 +42,13 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
         bail!("remote {remote:?} not found (git remote add it first, or pass --remote)");
     }
     let refspec = fetch_refspec(remote);
+    let legacy = legacy_fetch_refspec(remote);
     let key = format!("remote.{remote}.fetch");
     let existing = git(&workdir, &["config", "--get-all", &key]).unwrap_or_default();
+    if existing.lines().any(|line| line == legacy) {
+        git(&workdir, &["config", "--fixed-value", "--unset-all", &key, &legacy])?;
+        println!("removed legacy refspec {legacy}");
+    }
     if existing.lines().any(|line| line == refspec) {
         println!("{key} already includes {refspec}");
     } else {
@@ -91,11 +105,12 @@ pub fn deinit(store: &Store, force: bool) -> Result<()> {
     }
     for remote in git(&workdir, &["remote"])?.lines() {
         let key = format!("remote.{remote}.fetch");
-        let refspec = fetch_refspec(remote);
         let existing = git(&workdir, &["config", "--get-all", &key]).unwrap_or_default();
-        if existing.lines().any(|line| line == refspec) {
-            git(&workdir, &["config", "--fixed-value", "--unset-all", &key, &refspec])?;
-            println!("removed {refspec} from {key}");
+        for refspec in [fetch_refspec(remote), legacy_fetch_refspec(remote)] {
+            if existing.lines().any(|line| line == refspec) {
+                git(&workdir, &["config", "--fixed-value", "--unset-all", &key, &refspec])?;
+                println!("removed {refspec} from {key}");
+            }
         }
     }
     let refs = git(&workdir, &["for-each-ref", "--format=%(refname)", "refs/threads/"])?;
@@ -1614,17 +1629,13 @@ pub fn push(store: &Store, remote: &str) -> Result<()> {
 }
 
 /// Fetch into the tracking ref and integrate. `None` means the remote has no
-/// threads data yet. The explicit refspec makes this work (and self-heal)
-/// even without the configured refspec from `init`.
+/// threads data yet (the glob refspec matches nothing and the fetch is a
+/// no-op). The explicit refspec makes this work even without the configured
+/// refspec from `init`.
 fn fetch_and_integrate(store: &Store, remote: &str) -> Result<Option<Integration>> {
     let workdir = workdir(store)?;
     let refspec = fetch_refspec(remote);
-    if let Err(err) = git(&workdir, &["fetch", remote, &refspec]) {
-        if err.to_string().contains("couldn't find remote ref") {
-            return Ok(None);
-        }
-        return Err(err);
-    }
+    git(&workdir, &["fetch", remote, &refspec])?;
     match store.tracking_tip(remote)? {
         Some(remote_tip) => Ok(Some(store.integrate(remote_tip)?)),
         None => Ok(None),

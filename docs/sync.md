@@ -12,11 +12,17 @@ Spec: [SPEC.md](../SPEC.md) §7. Code:
 `git threads init` adds a single fetch refspec to the remote:
 
 ```
-fetch = +refs/threads/data:refs/threads/remotes/<remote>/data
+fetch = +refs/threads/data*:refs/threads/remotes/<remote>/data*
 ```
 
 Every design constraint here was learned the hard way (one of them by this very repository —
 see below):
+
+- **The refspec is a glob, not an exact ref.** Git treats a configured exact refspec as
+  mandatory: if the remote has no `refs/threads/data` yet, every plain `git fetch` fails with
+  "couldn't find remote ref" — running `init` before anyone has pushed threads data would
+  break ordinary fetching for the whole clone. A glob that matches nothing is silently
+  skipped. (`init` migrates the exact form written by earlier versions.)
 
 - **Remote state lands in a tracking ref, never directly on `refs/threads/data`.** The naive
   mapping `+refs/threads/*:refs/threads/*` means every plain `git fetch` force-overwrites your
