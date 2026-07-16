@@ -799,7 +799,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 .unwrap_or("");
             println!("{} {decoration} {place}{note}  {title}", ui.yellow(short(&thread.id)));
             if let Some(mode) = snippet_mode {
-                print!("{}", anchor_snippet(ui, store, effective, mode)?);
+                print!("{}", anchor_snippet(ui, store, effective, &placement, at_commit, mode)?);
             }
         } else {
             if shown > 0 {
@@ -827,7 +827,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 }
             }
             if let Some(mode) = snippet_mode {
-                print!("{}", anchor_snippet(ui, store, effective, mode)?);
+                print!("{}", anchor_snippet(ui, store, effective, &placement, at_commit, mode)?);
             }
         }
         shown += 1;
@@ -984,8 +984,18 @@ pub enum SnippetMode {
 /// The context a thread is about. Comments target diffs, so this is the
 /// anchored change itself, rendered as git renders diffs. When there is no
 /// change to show — snapshot annotations (an empty diff), or anchors whose
-/// lines predate the diff-intersection rule — the annotated file stands in.
-fn anchor_snippet(ui: Ui, store: &Store, anchor: &Anchor, mode: SnippetMode) -> Result<String> {
+/// lines predate the diff-intersection rule — the file stands in: at the
+/// placement's location when the code was found on the target commit (the
+/// snippet then agrees with the `Current:`/`Anchor:` line above it), the
+/// original blob only when it wasn't.
+fn anchor_snippet(
+    ui: Ui,
+    store: &Store,
+    anchor: &Anchor,
+    placement: &Reanchor,
+    target: ObjectId,
+    mode: SnippetMode,
+) -> Result<String> {
     if anchor.diff.base != anchor.diff.head {
         let (base, head) = (anchor.diff.base.as_str(), anchor.diff.head.as_str());
         let stat = mode == SnippetMode::Stat
@@ -1005,6 +1015,11 @@ fn anchor_snippet(ui: Ui, store: &Store, anchor: &Anchor, mode: SnippetMode) -> 
         if !rendered.is_empty() {
             return Ok(rendered);
         }
+    }
+    if let Reanchor::Located { path, lines: Some(lines), .. } = placement
+        && let Some(blob_id) = reanchor::blob_at(store.repo(), target, path)?
+    {
+        return Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, *lines));
     }
     if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
         let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
@@ -1340,7 +1355,7 @@ fn render_thread(
     }
 
     let unseen = unseen_ids(thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
-    out.push_str(&anchor_snippet(ui, store, effective, mode)?);
+    out.push_str(&anchor_snippet(ui, store, effective, &placement, target, mode)?);
     out.push_str(&render_conversation(ui, thread, &folded, &unseen));
     Ok(out)
 }

@@ -499,6 +499,46 @@ fn move_repins_an_outdated_thread() {
 }
 
 #[test]
+fn snapshot_annotation_excerpt_follows_the_code() {
+    let dir = setup_repo();
+    let path = dir.path();
+    let store = Store::open(path).unwrap();
+
+    let mut snapshot = opts("b is a stub");
+    snapshot.target = Some("HEAD..HEAD".into());
+    snapshot.file = Some("src/lib.rs:2".into());
+    let thread_id = commands::comment(&store, &snapshot).unwrap();
+
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    // The code shifts down two lines: the excerpt shows the new location,
+    // agreeing with the Current: line above it.
+    fs::write(path.join("src/lib.rs"), "// one\n// two\nfn a() {}\nfn b() {}\nfn c() {}\n")
+        .unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "prepend comments"]);
+    let shown = run(&["show", thread_id.as_str()]);
+    assert!(shown.contains("Current:  src/lib.rs:4-4"), "{shown}");
+    assert!(shown.contains("4 │ fn b() {}"), "{shown}");
+
+    // Once the code is gone, the original excerpt is all there is.
+    fs::write(path.join("src/lib.rs"), "// nothing left\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "gut the file"]);
+    let shown = run(&["show", thread_id.as_str()]);
+    assert!(shown.contains("no match"), "{shown}");
+    assert!(shown.contains("2 │ fn b() {}"), "{shown}");
+}
+
+#[test]
 fn root_commit_suggests_a_range() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();

@@ -248,8 +248,9 @@ full original-versus-current story is [`show`](#git-threads-show)'s job. `--onel
 compresses each thread to one line — ID, decorations, location, first line of the root —
 the way `git log --oneline` does. `-p` / `--patch` appends the change each thread discusses, kept bounded across many
 threads: the diff clipped to the hunks overlapping the anchored lines, a diffstat for
-whole-change and whole-file threads, and the annotated file excerpt when there is no diff
-to show (snapshot annotations). `--stat` appends the diffstat for every thread, like
+whole-change and whole-file threads, and — when there is no diff to show (snapshot
+annotations) — the annotated file excerpt, taken from wherever the code sits at `--at`
+(the original excerpt when the thread is outdated). `--stat` appends the diffstat for every thread, like
 `git log --stat`. Both compose with `--oneline`; the full patch is `show -p`'s job.
 
 The rest of git log's narrowing vocabulary applies to the thread's root comment:
@@ -296,7 +297,9 @@ where the code sits at `--at` per the re-anchoring algorithm, with its status
 
 The change renders bounded by default: line anchors show the diff clipped to their hunks,
 whole-change and whole-file anchors show the diffstat (`git log --stat` style), and
-snapshot annotations show the annotated file excerpt. `-p` expands to the full patch;
+snapshot annotations show the annotated file excerpt — taken from wherever the code sits
+at `--at`, so it always agrees with the `Current:` line (the original excerpt when the
+thread is outdated). `-p` expands to the full patch;
 `--stat` forces the diffstat. `--json` emits the thread as one JSON object, the same shape
 as `list --json`'s elements.
 
