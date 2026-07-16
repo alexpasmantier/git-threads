@@ -175,64 +175,7 @@ pub struct CommentOpts {
 /// Create a new thread anchored to a commit, file, or line range (SPEC.md §3).
 pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     let repo = store.repo();
-    let Target { base, head, file } =
-        resolve_target(repo, opts.target.as_deref(), opts.file.as_deref(), opts.side)?;
-
-    let (kind, path, lines, blob) = match &file {
-        None => (AnchorKind::Commit, None, None, None),
-        Some(spec) => {
-            let (file, suffix) = split_line_suffix(spec);
-            // The blob is resolved on the anchor's side: `new` reads the head
-            // tree, `old` the base tree (e.g. comments on deleted lines).
-            let side_commit = match opts.side {
-                Side::New => head,
-                Side::Old => base,
-            };
-            let (blob_id, line_count) = blob_at(repo, side_commit, file)?.with_context(|| {
-                format!(
-                    "{file:?} not found in the {} version ({})",
-                    match opts.side {
-                        Side::New => "new",
-                        Side::Old => "old",
-                    },
-                    side_commit
-                )
-            })?;
-            let lines = suffix
-                .map(|spec| {
-                    let range = parse_lines(spec)?;
-                    if range.end as usize > line_count {
-                        bail!("lines {spec} are out of range: {file:?} has {line_count} lines");
-                    }
-                    Ok(range)
-                })
-                .transpose()?;
-            // A comment on a diff must be about that diff; an empty diff
-            // (base == head) is the deliberate snapshot-annotation spelling.
-            if base != head {
-                ensure_in_diff(repo, base, head, file, opts.side, lines)?;
-            }
-            let kind = if lines.is_some() { AnchorKind::Range } else { AnchorKind::File };
-            let blob = GitOid::from_hex(blob_id.to_string())?;
-            (kind, Some(file.to_string()), lines, Some(blob))
-        }
-    };
-
-    let anchor = Anchor {
-        v: 1,
-        kind,
-        diff: DiffRef {
-            base: GitOid::from_hex(base.to_string())?,
-            head: GitOid::from_hex(head.to_string())?,
-        },
-        path,
-        old_path: None,
-        side: file.as_ref().map(|_| opts.side),
-        lines,
-        blob,
-        cols: None,
-        extra: Default::default(),
-    };
+    let anchor = resolve_anchor(repo, opts.target.as_deref(), opts.file.as_deref(), opts.side)?;
     let root = new_event(repo, EventKind::Comment, |e| {
         e.body = Some(wrap_message(&opts.message));
     })?;
@@ -251,11 +194,80 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
     Ok(thread_id)
 }
 
+/// Resolve and fully validate what a comment anchors to — target, file,
+/// lines, membership in the diff. Everything that can reject a comment is
+/// here, so the CLI can run it before opening the editor and no one writes
+/// a message that can't be saved.
+pub fn resolve_anchor(
+    repo: &gix::Repository,
+    target: Option<&str>,
+    file: Option<&str>,
+    side: Side,
+) -> Result<Anchor> {
+    let Target { base, head, file } = resolve_target(repo, target, file, side)?;
+
+    let (kind, path, lines, blob) = match &file {
+        None => (AnchorKind::Commit, None, None, None),
+        Some(spec) => {
+            let (file, suffix) = split_line_suffix(spec);
+            // The blob is resolved on the anchor's side: `new` reads the head
+            // tree, `old` the base tree (e.g. comments on deleted lines).
+            let side_commit = match side {
+                Side::New => head,
+                Side::Old => base,
+            };
+            let (blob_id, line_count) = blob_at(repo, side_commit, file)?.with_context(|| {
+                format!(
+                    "{file:?} not found in the {} version ({})",
+                    match side {
+                        Side::New => "new",
+                        Side::Old => "old",
+                    },
+                    side_commit
+                )
+            })?;
+            let lines = suffix
+                .map(|spec| {
+                    let range = parse_lines(spec)?;
+                    if range.end as usize > line_count {
+                        bail!("lines {spec} are out of range: {file:?} has {line_count} lines");
+                    }
+                    Ok(range)
+                })
+                .transpose()?;
+            // A comment on a diff must be about that diff; an empty diff
+            // (base == head) is the deliberate snapshot-annotation spelling.
+            if base != head {
+                ensure_in_diff(repo, base, head, file, side, lines)?;
+            }
+            let kind = if lines.is_some() { AnchorKind::Range } else { AnchorKind::File };
+            let blob = GitOid::from_hex(blob_id.to_string())?;
+            (kind, Some(file.to_string()), lines, Some(blob))
+        }
+    };
+
+    Ok(Anchor {
+        v: 1,
+        kind,
+        diff: DiffRef {
+            base: GitOid::from_hex(base.to_string())?,
+            head: GitOid::from_hex(head.to_string())?,
+        },
+        path,
+        old_path: None,
+        side: file.as_ref().map(|_| side),
+        lines,
+        blob,
+        cols: None,
+        extra: Default::default(),
+    })
+}
+
 /// The diff a comment targets, and the file within it, if any.
-pub struct Target {
-    pub base: ObjectId,
-    pub head: ObjectId,
-    pub file: Option<String>,
+struct Target {
+    base: ObjectId,
+    head: ObjectId,
+    file: Option<String>,
 }
 
 /// Sort out what `comment`'s positionals refer to, the way git disambiguates
@@ -263,7 +275,7 @@ pub struct Target {
 /// first-parent change) or a range — and, when it's the only one, may instead
 /// be a file (path or path:lines) of HEAD's change. The second positional is
 /// always a file.
-pub fn resolve_target(
+fn resolve_target(
     repo: &gix::Repository,
     target: Option<&str>,
     file: Option<&str>,

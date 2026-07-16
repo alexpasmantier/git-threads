@@ -237,8 +237,10 @@ fn main() -> anyhow::Result<()> {
             let message = match message {
                 Some(text) => text,
                 None => {
-                    // Catch a bad target before the user types a message.
-                    commands::resolve_target(
+                    // Catch anything that would reject the comment — bad
+                    // target, lines out of range, file outside the diff —
+                    // before the user types a message.
+                    commands::resolve_anchor(
                         store.repo(),
                         target.as_deref(),
                         file.as_deref(),
