@@ -19,29 +19,50 @@ pub enum CanonicalError {
 
 /// Serialize `value` to canonical JSON bytes.
 ///
-/// Key sorting comes from `serde_json`'s default `BTreeMap`-backed object
-/// representation (this crate must never enable the `preserve_order`
-/// feature), and compact output has no insignificant whitespace.
+/// Object keys are sorted here, explicitly: canonical bytes must not depend
+/// on `serde_json`'s map order, which the `preserve_order` feature changes —
+/// and feature unification means any crate in a consumer's dependency graph
+/// could enable it. Compact output has no insignificant whitespace; strings
+/// take `serde_json`'s minimal escaping.
 pub fn to_canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, CanonicalError> {
     let value = serde_json::to_value(value)?;
-    reject_floats(&value, "$")?;
-    Ok(serde_json::to_vec(&value)?)
+    let mut out = Vec::new();
+    write_canonical(&value, "$", &mut out)?;
+    Ok(out)
 }
 
-fn reject_floats(value: &Value, path: &str) -> Result<(), CanonicalError> {
+fn write_canonical(value: &Value, path: &str, out: &mut Vec<u8>) -> Result<(), CanonicalError> {
     match value {
-        Value::Number(n) if !n.is_i64() && !n.is_u64() => Err(CanonicalError::Float {
-            path: path.to_string(),
-        }),
-        Value::Array(items) => items
-            .iter()
-            .enumerate()
-            .try_for_each(|(i, v)| reject_floats(v, &format!("{path}[{i}]"))),
-        Value::Object(map) => map
-            .iter()
-            .try_for_each(|(k, v)| reject_floats(v, &format!("{path}.{k}"))),
-        _ => Ok(()),
+        Value::Number(n) if !n.is_i64() && !n.is_u64() => {
+            return Err(CanonicalError::Float { path: path.to_string() });
+        }
+        Value::Array(items) => {
+            out.push(b'[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_canonical(item, &format!("{path}[{i}]"), out)?;
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable(); // byte order (SPEC.md §6)
+            out.push(b'{');
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                serde_json::to_writer(&mut *out, key)?;
+                out.push(b':');
+                write_canonical(&map[key.as_str()], &format!("{path}.{key}"), out)?;
+            }
+            out.push(b'}');
+        }
+        scalar => serde_json::to_writer(&mut *out, scalar)?,
     }
+    Ok(())
 }
 
 #[cfg(test)]
