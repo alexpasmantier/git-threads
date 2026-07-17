@@ -2,7 +2,9 @@
 //! review-thread data as the GraphQL API shapes it, so everything below the
 //! network seam is exercised against a real repository.
 
-use git_threads::import::{self, GhUser, IdRef, OidRef, Page, PageInfo, ReviewComment, ReviewThread};
+use git_threads::import::{
+    self, GhUser, IdRef, OidRef, Page, PageInfo, ReviewComment, ReviewThread,
+};
 use git_threads::store::Store;
 use git_threads_core::{AnchorKind, EventKind, Side, fold_thread};
 use std::fs;
@@ -10,12 +12,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("failed to run git");
+    let output =
+        Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to run git");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -52,7 +50,13 @@ fn user(login: &str, id: u64) -> Option<GhUser> {
     Some(GhUser { login: login.into(), database_id: Some(id) })
 }
 
-fn comment(node_id: &str, body: &str, ts: &str, head: &str, reply_to: Option<&str>) -> ReviewComment {
+fn comment(
+    node_id: &str,
+    body: &str,
+    ts: &str,
+    head: &str,
+    reply_to: Option<&str>,
+) -> ReviewComment {
     ReviewComment {
         id: node_id.into(),
         url: format!("https://github.com/o/r/pull/1#discussion_{node_id}"),

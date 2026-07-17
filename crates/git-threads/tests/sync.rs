@@ -9,12 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("failed to run git");
+    let output =
+        Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to run git");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -72,10 +68,7 @@ fn publish_then_pull_transfers_threads() {
 
     commands::pull(&bob_store, "origin").unwrap();
     let thread = bob_store.read_thread(&thread_id).unwrap().expect("thread arrived");
-    assert_eq!(
-        thread.events[0].1.body.as_deref(),
-        Some("does three need to be a string?")
-    );
+    assert_eq!(thread.events[0].1.body.as_deref(), Some("does three need to be a string?"));
 
     // Bob replies and publishes; Alice pulls the reply back.
     commands::reply(&bob_store, thread_id.as_str(), "no, fixing").unwrap();

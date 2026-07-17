@@ -84,7 +84,9 @@ impl<'de> serde::Deserialize<'de> for Reanchor {
                     Some("relocated") => ReanchorStatus::Relocated,
                     Some("fuzzy") => ReanchorStatus::Fuzzy(raw.fuzz.unwrap_or(0)),
                     other => {
-                        return Err(D::Error::custom(format!("unknown placement status {other:?}")));
+                        return Err(D::Error::custom(format!(
+                            "unknown placement status {other:?}"
+                        )));
                     }
                 };
                 Ok(Reanchor::Located { path, lines: raw.lines, status })

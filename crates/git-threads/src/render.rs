@@ -25,13 +25,8 @@ pub fn thread(ui: Ui, store: &Store, view: &ThreadView, mode: SnippetMode) -> Re
     if view.moved_to.is_some() {
         deco.push(ui.yellow("moved"));
     }
-    writeln!(
-        out,
-        "{} {}",
-        ui.yellow(format_args!("thread {}", view.id)),
-        decorate(ui, &deco)
-    )
-    .unwrap();
+    writeln!(out, "{} {}", ui.yellow(format_args!("thread {}", view.id)), decorate(ui, &deco))
+        .unwrap();
     let side = match anchor.side {
         Some(Side::Old) => ui.dim(" (old side)"),
         _ => String::new(),
@@ -57,11 +52,7 @@ pub fn thread(ui: Ui, store: &Store, view: &ThreadView, mode: SnippetMode) -> Re
             out,
             "Moved:    {} {}",
             ui.bold(location(moved_to, false)),
-            ui.dim(format_args!(
-                "at {} by {}",
-                &moved_to.diff.head.as_str()[..12],
-                moved_by.name
-            ))
+            ui.dim(format_args!("at {} by {}", &moved_to.diff.head.as_str()[..12], moved_by.name))
         )
         .unwrap();
     }
@@ -151,12 +142,7 @@ pub fn list_entry(
         String::new()
     };
     if oneline {
-        let title = root
-            .and_then(|r| r.body.as_deref())
-            .unwrap_or("")
-            .lines()
-            .next()
-            .unwrap_or("");
+        let title = root.and_then(|r| r.body.as_deref()).unwrap_or("").lines().next().unwrap_or("");
         writeln!(out, "{} {decoration} {place}{note}  {title}", ui.yellow(short(&view.id)))
             .unwrap();
     } else {
@@ -343,8 +329,7 @@ fn stat(ui: Ui, stat: &str) -> String {
     for line in stat.lines() {
         match line.rsplit_once('|') {
             Some((left, graph)) => {
-                let graph =
-                    graph.replace('+', &ui.green("+")).replace('-', &ui.red("-"));
+                let graph = graph.replace('+', &ui.green("+")).replace('-', &ui.red("-"));
                 writeln!(out, " {left}|{graph}").unwrap();
             }
             None => writeln!(out, " {line}").unwrap(),
@@ -377,9 +362,7 @@ fn diff(
             let span = |token: Option<&str>, sign: char| -> (u32, u32) {
                 let Some(token) = token.and_then(|t| t.strip_prefix(sign)) else { return (0, 0) };
                 match token.split_once(',') {
-                    Some((start, len)) => {
-                        (start.parse().unwrap_or(0), len.parse().unwrap_or(0))
-                    }
+                    Some((start, len)) => (start.parse().unwrap_or(0), len.parse().unwrap_or(0)),
                     None => (token.parse().unwrap_or(0), 1),
                 }
             };

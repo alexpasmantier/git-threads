@@ -83,12 +83,7 @@ pub fn derive_snippet(content: &str, lines: LineRange) -> Option<Snippet> {
         SnippetTarget::Full(target_lines.iter().map(|s| s.to_string()).collect())
     };
 
-    Some(Snippet {
-        first_line: (before_start + 1) as u32,
-        before,
-        target,
-        after,
-    })
+    Some(Snippet { first_line: (before_start + 1) as u32, before, target, after })
 }
 
 #[cfg(test)]

@@ -74,10 +74,8 @@ pub fn fold_thread(events: impl IntoIterator<Item = (EventId, Event)>) -> Folded
                     edits_by_target.entry(target).or_default().push((id, event));
                 }
             }
-            EventKind::Delete => {
-                if event.supersedes.is_some() {
-                    deletes.push((id, event));
-                }
+            EventKind::Delete if event.supersedes.is_some() => {
+                deletes.push((id, event));
             }
             _ => {}
         }
@@ -97,9 +95,15 @@ pub fn fold_thread(events: impl IntoIterator<Item = (EventId, Event)>) -> Folded
             // Follow the supersede chain: at each node, the latest same-author
             // edit (by ts, id) wins; continue from the winner. The chain set
             // guards against cycles in malformed data.
-            while let Some(winner) = edits_by_target.get(current).into_iter().flatten().filter(
-                |(edit_id, edit)| edit.author.email == *author_email && !chain.contains(edit_id),
-            ).max_by_key(|(edit_id, edit)| sort_key(edit_id, edit)) {
+            while let Some(winner) = edits_by_target
+                .get(current)
+                .into_iter()
+                .flatten()
+                .filter(|(edit_id, edit)| {
+                    edit.author.email == *author_email && !chain.contains(edit_id)
+                })
+                .max_by_key(|(edit_id, edit)| sort_key(edit_id, edit))
+            {
                 let (edit_id, edit) = *winner;
                 chain.insert(edit_id);
                 effective_body = edit.body.clone();
@@ -110,10 +114,7 @@ pub fn fold_thread(events: impl IntoIterator<Item = (EventId, Event)>) -> Folded
             // over edits regardless of order.
             let retracted = deletes.iter().any(|(_, delete)| {
                 delete.author.email == *author_email
-                    && delete
-                        .supersedes
-                        .as_ref()
-                        .is_some_and(|target| chain.contains(target))
+                    && delete.supersedes.as_ref().is_some_and(|target| chain.contains(target))
             });
             FoldedEvent {
                 id: id.clone(),

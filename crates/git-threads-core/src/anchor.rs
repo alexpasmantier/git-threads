@@ -147,12 +147,9 @@ impl Anchor {
                 });
             }
         }
-        for range in [
-            self.lines.map(|l| (l.start, l.end)),
-            self.cols.map(|c| (c.start, c.end)),
-        ]
-        .into_iter()
-        .flatten()
+        for range in [self.lines.map(|l| (l.start, l.end)), self.cols.map(|c| (c.start, c.end))]
+            .into_iter()
+            .flatten()
         {
             let (start, end) = range;
             if start < 1 || end < start {
@@ -214,10 +211,7 @@ mod tests {
     fn validate_per_kind_rules() {
         let mut anchor = range_anchor();
         anchor.lines = None;
-        assert!(matches!(
-            anchor.validate(),
-            Err(AnchorError::MissingField { field: "lines", .. })
-        ));
+        assert!(matches!(anchor.validate(), Err(AnchorError::MissingField { field: "lines", .. })));
 
         let mut anchor = range_anchor();
         anchor.kind = AnchorKind::Commit;
@@ -240,9 +234,10 @@ mod tests {
 
     #[test]
     fn unknown_kind_is_preserved() {
-        let raw = r#"{"v":1,"kind":"symbol","diff":{"base":"__A__","head":"__B__"},"symbol_id":"x"}"#
-            .replace("__A__", &"a".repeat(40))
-            .replace("__B__", &"b".repeat(40));
+        let raw =
+            r#"{"v":1,"kind":"symbol","diff":{"base":"__A__","head":"__B__"},"symbol_id":"x"}"#
+                .replace("__A__", &"a".repeat(40))
+                .replace("__B__", &"b".repeat(40));
         let anchor: Anchor = serde_json::from_str(&raw).unwrap();
         assert_eq!(anchor.kind, AnchorKind::Other("symbol".into()));
         anchor.validate().unwrap();

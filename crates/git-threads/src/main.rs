@@ -280,8 +280,10 @@ fn main() -> anyhow::Result<()> {
                     editor::message(store.repo(), "", COMMENT_HINT)?
                 }
             };
-            let thread =
-                commands::comment(&store, &CommentOpts { target, file, message, side: side.into() })?;
+            let thread = commands::comment(
+                &store,
+                &CommentOpts { target, file, message, side: side.into() },
+            )?;
             println!(
                 "drafted thread {} {}",
                 ui.yellow(short(&thread)),
@@ -359,7 +361,9 @@ fn main() -> anyhow::Result<()> {
                 };
                 stayed(&sweep.unplaced, &format!("no verbatim match at {at_short}"));
                 stayed(&sweep.whole_commit, "whole-change threads never re-anchor");
-                if sweep.moved.is_empty() && sweep.unplaced.is_empty() && sweep.whole_commit.is_empty()
+                if sweep.moved.is_empty()
+                    && sweep.unplaced.is_empty()
+                    && sweep.whole_commit.is_empty()
                 {
                     println!("no orphaned threads at {}", ui.bold(at_short));
                 } else if !sweep.moved.is_empty() {
@@ -470,7 +474,10 @@ fn main() -> anyhow::Result<()> {
             if report.events == 0 {
                 match report.known {
                     0 => println!("nothing to import"),
-                    n => println!("everything already imported ({n} event{})", if n == 1 { "" } else { "s" }),
+                    n => println!(
+                        "everything already imported ({n} event{})",
+                        if n == 1 { "" } else { "s" }
+                    ),
                 }
             } else {
                 println!(

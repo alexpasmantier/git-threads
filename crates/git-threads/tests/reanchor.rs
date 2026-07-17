@@ -12,12 +12,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("failed to run git");
+    let output =
+        Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to run git");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -206,9 +202,8 @@ fn placements_are_cached_per_target_and_served_from_the_cache() {
 
     // Poison the stored entry: getting the poisoned value back is the proof
     // that placement() reads the cache, not the repository.
-    let key = git_threads_core::EventId::compute(
-        &git_threads_core::to_canonical_json(&anchor).unwrap(),
-    );
+    let key =
+        git_threads_core::EventId::compute(&git_threads_core::to_canonical_json(&anchor).unwrap());
     let poisoned =
         format!("{{\"v\":1,\"entries\":{{\"{}\":{{\"kind\":\"outdated\"}}}}}}", key.as_str());
     fs::write(&file, poisoned).unwrap();

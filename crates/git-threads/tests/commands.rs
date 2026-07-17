@@ -523,7 +523,8 @@ fn json_output_carries_folded_state_and_placement() {
     let mut on_lines = opts("does b need a body?");
     on_lines.file = Some("src/lib.rs:2".into());
     let thread_id = commands::comment(&store, &on_lines).unwrap();
-    let reply_id = commands::reply(&store, thread_id.as_str(), "wrong thread, sorry").unwrap().event;
+    let reply_id =
+        commands::reply(&store, thread_id.as_str(), "wrong thread, sorry").unwrap().event;
     commands::delete(&store, reply_id.as_str()).unwrap();
 
     let run = |args: &[&str]| {
@@ -740,7 +741,8 @@ fn replying_to_a_reply_targets_it_within_the_same_thread() {
     let first_reply = commands::reply(&store, thread_id.as_str(), "first answer").unwrap().event;
 
     // Reply by naming the reply, not the thread.
-    let second_reply = commands::reply(&store, first_reply.as_str(), "disagree with that").unwrap().event;
+    let second_reply =
+        commands::reply(&store, first_reply.as_str(), "disagree with that").unwrap().event;
     let thread = store.read_thread(&thread_id).unwrap().expect("same thread");
     let event = &thread.events.iter().find(|(id, _)| *id == second_reply).unwrap().1;
     assert_eq!(event.in_reply_to, Some(first_reply.clone()));

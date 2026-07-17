@@ -659,8 +659,12 @@ pub fn move_orphans(store: &Store, at: &str) -> Result<OrphanMoves> {
         let event = move_event(repo, target, &repin.path, repin.lines, blob)?;
         let event_id = event.id()?;
         appends.push(Append { thread: repin.thread.clone(), events: vec![event] });
-        let draft =
-            MoveDraft { thread: repin.thread, event: event_id, path: repin.path, lines: repin.lines };
+        let draft = MoveDraft {
+            thread: repin.thread,
+            event: event_id,
+            path: repin.path,
+            lines: repin.lines,
+        };
         moved.push((draft, repin.status));
     }
     if !appends.is_empty() {
@@ -1093,11 +1097,8 @@ fn resolve_list_filters(
 /// `/pull/<n>` or `/merge_requests/<n>` path segment pair. Native threads
 /// carry no origin and never match.
 fn origin_pr(event: &Event, number: &str) -> bool {
-    let Some(url) = event
-        .extra
-        .get("origin")
-        .and_then(|origin| origin.get("url"))
-        .and_then(|url| url.as_str())
+    let Some(url) =
+        event.extra.get("origin").and_then(|origin| origin.get("url")).and_then(|url| url.as_str())
     else {
         return false;
     };
@@ -1269,7 +1270,10 @@ pub fn discard(store: &Store, prefix: &str) -> Result<Discarded> {
 #[derive(Clone, Debug)]
 pub enum Discarded {
     /// The whole draft thread went with its discarded root.
-    Thread { thread: ThreadId, events: usize },
+    Thread {
+        thread: ThreadId,
+        events: usize,
+    },
     Event(EventId),
 }
 

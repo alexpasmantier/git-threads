@@ -18,7 +18,9 @@ pub enum EventError {
 }
 
 #[derive(Debug, Error)]
-#[error("invalid timestamp {0:?}: expected ISO 8601 UTC with second precision (YYYY-MM-DDTHH:MM:SSZ)")]
+#[error(
+    "invalid timestamp {0:?}: expected ISO 8601 UTC with second precision (YYYY-MM-DDTHH:MM:SSZ)"
+)]
 pub struct TimestampError(String);
 
 /// ISO 8601 UTC timestamp with second precision, e.g. `2026-07-03T14:12:09Z`.
@@ -184,9 +186,7 @@ impl Event {
             EventKind::Comment => (&["body"], &["in_reply_to", "supersedes", "resolved", "anchor"]),
             EventKind::Reply => (&["body", "in_reply_to"], &["supersedes", "resolved", "anchor"]),
             EventKind::Edit => (&["body", "supersedes"], &["in_reply_to", "resolved", "anchor"]),
-            EventKind::Resolve => {
-                (&["resolved"], &["body", "in_reply_to", "supersedes", "anchor"])
-            }
+            EventKind::Resolve => (&["resolved"], &["body", "in_reply_to", "supersedes", "anchor"]),
             EventKind::Delete => (&["supersedes"], &["body", "in_reply_to", "resolved", "anchor"]),
             EventKind::Move => (&["anchor"], &["body", "in_reply_to", "supersedes", "resolved"]),
             EventKind::Other(_) => (&[], &[]),
@@ -230,10 +230,7 @@ mod tests {
     use super::*;
 
     pub(crate) fn author() -> Author {
-        Author {
-            name: "Alex Pasmant".into(),
-            email: "alex.pasmant@gmail.com".into(),
-        }
+        Author { name: "Alex Pasmant".into(), email: "alex.pasmant@gmail.com".into() }
     }
 
     pub(crate) fn comment(ts: &str, body: &str) -> Event {
@@ -265,10 +262,7 @@ mod tests {
         // Independently computed with `printf '%s' <canonical bytes> | sha256sum`.
         // Any implementation of the spec must reproduce this exact ID.
         let event = comment("2026-07-03T14:12:09Z", "why not a BTreeMap here?");
-        assert_eq!(
-            event.id().unwrap().as_str(),
-            "0dfeaf728bb362b9b0b8f40fb20b17ff7c96b1cc"
-        );
+        assert_eq!(event.id().unwrap().as_str(), "0dfeaf728bb362b9b0b8f40fb20b17ff7c96b1cc");
     }
 
     #[test]
@@ -315,22 +309,19 @@ mod tests {
         let mut event = comment("2026-01-01T00:00:00Z", "b");
         event.kind = EventKind::Move;
         event.body = None;
-        assert!(matches!(
-            event.validate(),
-            Err(EventError::MissingField { field: "anchor", .. })
-        ));
+        assert!(matches!(event.validate(), Err(EventError::MissingField { field: "anchor", .. })));
     }
 
     #[test]
     fn timestamp_validation() {
         assert!(Timestamp::parse("2026-07-03T14:12:09Z").is_ok());
         for bad in [
-            "2026-07-03T14:12:09",      // missing Z
-            "2026-07-03 14:12:09Z",     // space separator
-            "2026-13-03T14:12:09Z",     // month 13
-            "2026-07-03T24:12:09Z",     // hour 24
-            "2026-07-03T14:12:09.5Z",   // sub-second
-            "2026-7-3T14:12:09Z",       // non-fixed-width
+            "2026-07-03T14:12:09",    // missing Z
+            "2026-07-03 14:12:09Z",   // space separator
+            "2026-13-03T14:12:09Z",   // month 13
+            "2026-07-03T24:12:09Z",   // hour 24
+            "2026-07-03T14:12:09.5Z", // sub-second
+            "2026-7-3T14:12:09Z",     // non-fixed-width
         ] {
             assert!(Timestamp::parse(bad).is_err(), "should reject {bad:?}");
         }

@@ -140,11 +140,8 @@ struct PrThreads {
 /// two `git fetch` round trips however many PRs the run covers. Progress
 /// for each network phase goes to stderr.
 pub fn github(store: &Store, remote: &str, spec: Option<&str>, all: bool) -> Result<ImportReport> {
-    let workdir = store
-        .repo()
-        .workdir()
-        .context("import requires a non-bare repository")?
-        .to_owned();
+    let workdir =
+        store.repo().workdir().context("import requires a non-bare repository")?.to_owned();
     let remote_url = commands::git(&workdir, &["remote", "get-url", remote])?;
     let remote_slug = github_slug(remote_url.trim());
 
@@ -315,8 +312,7 @@ fn map_thread(
             v: 1,
             kind: EventKind::Resolve,
             author,
-            ts: Timestamp::parse(last_ts)
-                .map_err(|e| anyhow!("bad timestamp on thread: {e}"))?,
+            ts: Timestamp::parse(last_ts).map_err(|e| anyhow!("bad timestamp on thread: {e}"))?,
             body: None,
             in_reply_to: None,
             supersedes: None,
@@ -376,8 +372,8 @@ fn map_anchor(
         (_, Some(end)) => {
             // A range spanning both diff sides has no single-file spelling;
             // keep the side the thread ends on and its line.
-            let spans_sides = thread.start_diff_side.is_some()
-                && thread.start_diff_side != thread.diff_side;
+            let spans_sides =
+                thread.start_diff_side.is_some() && thread.start_diff_side != thread.diff_side;
             let start = if spans_sides { end } else { thread.original_start_line.unwrap_or(end) };
             Some(LineRange { start: start.min(end), end })
         }
@@ -551,9 +547,8 @@ fn github_slug(url: &str) -> Option<(String, String)> {
 /// A PR spec: a number (`123`, `#123`) or a full PR URL, which also names
 /// the repository.
 fn parse_spec(spec: &str) -> Option<(Option<(String, String)>, u64)> {
-    if let Some(rest) = spec
-        .strip_prefix("https://github.com/")
-        .or_else(|| spec.strip_prefix("http://github.com/"))
+    if let Some(rest) =
+        spec.strip_prefix("https://github.com/").or_else(|| spec.strip_prefix("http://github.com/"))
     {
         let mut parts = rest.split('/');
         let owner = parts.next()?.to_string();
@@ -718,11 +713,7 @@ fn fetch_all_threads(slug: &(String, String)) -> Result<Vec<PrThreads>> {
                 out.push(PrThreads { number: pr.number, base_ref_oid: pr.base_ref_oid, threads });
             }
         }
-        eprintln!(
-            "scanned {scanned}/{} PRs ({} with review threads)",
-            page.total_count,
-            out.len()
-        );
+        eprintln!("scanned {scanned}/{} PRs ({} with review threads)", page.total_count, out.len());
         if !page.page_info.has_next_page {
             break;
         }
@@ -786,11 +777,7 @@ fn fetch_threads(
         let out = gh(&args)?;
         let response: ThreadsResponse =
             serde_json::from_str(&out).context("unexpected gh api graphql output")?;
-        let Some(pr) = response
-            .data
-            .and_then(|d| d.repository)
-            .and_then(|r| r.pull_request)
-        else {
+        let Some(pr) = response.data.and_then(|d| d.repository).and_then(|r| r.pull_request) else {
             return Ok(None);
         };
         base_ref_oid.get_or_insert(pr.base_ref_oid);
