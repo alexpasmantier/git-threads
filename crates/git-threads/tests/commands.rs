@@ -9,12 +9,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("failed to run git");
+    let output =
+        Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to run git");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -187,6 +183,38 @@ fn missing_message_opens_git_editor() {
 }
 
 #[test]
+fn paths_resolve_from_the_invocation_directory() {
+    let dir = setup_repo();
+    let path = dir.path();
+    let subdir = path.join("src");
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(&subdir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    // A cwd-relative path from a subdirectory anchors on the repo-relative
+    // path, exactly like any git command reads path arguments.
+    run(&["comment", "lib.rs:2-3", "-m", "from the subdir"]);
+    let store = Store::open(path).unwrap();
+    let thread = store.threads().unwrap().pop().unwrap();
+    assert_eq!(thread.anchor.path.as_deref(), Some("src/lib.rs"));
+
+    // Filters resolve the same way: relative, ./-forced, and ../ forms all
+    // name the same file, and ../ is a path, never a range.
+    for spec in ["lib.rs", "./lib.rs", "../src/lib.rs"] {
+        let listed = run(&["list", spec, "--oneline"]);
+        assert!(listed.contains("from the subdir"), "{spec}: {listed}");
+    }
+    let by_dir = run(&["list", ".", "--oneline"]);
+    assert!(by_dir.contains("from the subdir"), "{by_dir}");
+}
+
+#[test]
 fn old_side_comment_reads_base_blob() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
@@ -219,11 +247,8 @@ fn reply_and_resolve_round_trip_through_fold() {
     assert!(folded.resolved);
     assert_eq!(folded.events.len(), 2);
     // Same-second events order by ID tie-break, so locate the reply by kind.
-    let reply = folded
-        .events
-        .iter()
-        .find(|e| e.event.kind == EventKind::Reply)
-        .expect("reply present");
+    let reply =
+        folded.events.iter().find(|e| e.event.kind == EventKind::Reply).expect("reply present");
     assert_eq!(reply.event.in_reply_to, Some(thread_id.clone()));
 
     // Same-second resolve toggles are order-undefined (LWW ties break on
@@ -686,7 +711,10 @@ fn edit_replaces_body_and_chains() {
     assert_eq!(folded.events[0].effective_body.as_deref(), Some("original"));
     assert!(folded.events[0].edited);
     // The stored root body is untouched: edits are append-only events.
-    assert_eq!(thread.events.iter().find(|(id, _)| *id == thread_id).unwrap().1.body.as_deref(), Some("orignal"));
+    assert_eq!(
+        thread.events.iter().find(|(id, _)| *id == thread_id).unwrap().1.body.as_deref(),
+        Some("orignal")
+    );
 
     // A second edit supersedes the first edit (the chain tip), not the root.
     let second_edit = commands::edit(&store, thread_id.as_str(), "original, take 3").unwrap().event;
@@ -771,7 +799,8 @@ fn session_of_drafts_publishes_as_one_commit() {
 
     // One commit, with the batched message, pinning the anchored commit.
     let head = git_out(dir.path(), &["rev-parse", "HEAD"]);
-    let count = git_out(dir.path(), &["rev-list", "--count", "refs/threads/data", &format!("^{head}")]);
+    let count =
+        git_out(dir.path(), &["rev-list", "--count", "refs/threads/data", &format!("^{head}")]);
     assert_eq!(count, "1");
     let subject = git_out(dir.path(), &["log", "--pretty=%s", "-1", "refs/threads/data"]);
     assert_eq!(subject, "threads: 3 events in 2 threads");
@@ -824,12 +853,8 @@ fn discard_removes_a_draft_or_a_whole_draft_thread() {
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("failed to run git");
+    let output =
+        Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to run git");
     assert!(output.status.success(), "git {args:?} failed");
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }

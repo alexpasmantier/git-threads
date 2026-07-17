@@ -23,11 +23,16 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | [`push`](#git-threads-push) | shares your local discussion history (the fetch–union–push loop) |
 | [`pull`](#git-threads-pull) | fetches and integrates other people's discussion data |
 
-Two conventions apply everywhere:
+Three conventions apply everywhere:
 
 - **Any printed ID is a valid handle.** Wherever a command takes a thread, you can pass the
   thread ID *or the ID of any message in it* (as shown by `show`), and unique prefixes
   suffice — `git threads show 8472` works. Ambiguous prefixes are an error, never a guess.
+- **Paths read like git's.** File arguments are relative to the directory you run the
+  command in — from `src/` you can say `parser.rs:120`, `./parser.rs`, `../src/parser.rs`,
+  or an absolute path, and the anchor records the repo-relative path either way (which is
+  also how output prints it). A leading `./` or `../` always means a path, never a commit
+  or range.
 - **Writes are drafts.** `comment`, `reply`, `edit`, `delete`, and `resolve` stage events
   locally. Nothing enters shared history until `commit`, and nothing leaves your machine
   until `push`.

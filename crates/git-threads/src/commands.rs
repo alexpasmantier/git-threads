@@ -199,6 +199,7 @@ pub fn resolve_anchor(
         None => (AnchorKind::Commit, None, None, None),
         Some(spec) => {
             let (file, suffix) = split_line_suffix(spec);
+            let file = &repo_relative(repo, file)?;
             // The blob is resolved on the anchor's side: `new` reads the head
             // tree, `old` the base tree (e.g. comments on deleted lines).
             let side_commit = match side {
@@ -279,13 +280,18 @@ fn resolve_target(
         let (base, head) = resolve_diff(repo, spec)?;
         return Ok(Target { base, head, file: file.map(String::from) });
     }
+    if is_explicit_path(spec) {
+        let (base, head) = resolve_diff(repo, "HEAD")?;
+        return Ok(Target { base, head, file: Some(spec.to_string()) });
+    }
     if spec.contains("..") {
-        // Anything that looks like a range is one, as in git.
+        // Anything else that looks like a range is one, as in git.
         let (base, head) = resolve_diff(repo, spec)?;
         return Ok(Target { base, head, file: None });
     }
     let is_commit = resolve_commit(repo, spec).is_ok();
     let (path, _) = split_line_suffix(spec);
+    let path = repo_relative(repo, path)?;
     // A lone file positional means HEAD's change, so its blob lives in the
     // tree of the anchor's side: HEAD for `new`, HEAD's parent for `old`.
     let side_rev = match side {
@@ -293,12 +299,14 @@ fn resolve_target(
         Side::Old => "HEAD^",
     };
     let is_file = match resolve_commit(repo, side_rev) {
-        Ok(commit) => blob_at(repo, commit, path)?.is_some(),
+        Ok(commit) => blob_at(repo, commit, &path)?.is_some(),
         Err(_) => false,
     };
     match (is_commit, is_file) {
         (true, true) => {
-            bail!("{spec:?} is both a commit and a file; write `comment HEAD {spec}` to mean the file")
+            bail!(
+                "{spec:?} is both a commit and a file; write `comment HEAD {spec}` to mean the file"
+            )
         }
         (true, false) => {
             let (base, head) = resolve_diff(repo, spec)?;
@@ -328,10 +336,7 @@ fn ensure_in_diff(
     lines: Option<LineRange>,
 ) -> Result<()> {
     let (base_hex, head_hex) = (base.to_string(), head.to_string());
-    let diff = git(
-        repo.git_dir(),
-        &["diff", "--unified=0", &base_hex, &head_hex, "--", path],
-    )?;
+    let diff = git(repo.git_dir(), &["diff", "--unified=0", &base_hex, &head_hex, "--", path])?;
     let shown = format!("{}..{}", &base_hex[..12], &head_hex[..12]);
     let hint = format!(
         "comment on {0}..{0} (an empty diff) to annotate the file as it stands",
@@ -402,14 +407,9 @@ fn resolve_diff(repo: &gix::Repository, spec: &str) -> Result<(ObjectId, ObjectI
         Ok((end(a)?, end(b)?))
     } else {
         let head = resolve_commit(repo, spec)?;
-        let base = repo
-            .find_commit(head)?
-            .parent_ids()
-            .next()
-            .map(|id| id.detach())
-            .with_context(|| {
-                format!("{spec} has no parent; name a range instead (<base>..{spec})")
-            })?;
+        let base = repo.find_commit(head)?.parent_ids().next().map(|id| id.detach()).with_context(
+            || format!("{spec} has no parent; name a range instead (<base>..{spec})"),
+        )?;
         Ok((base, head))
     }
 }
@@ -533,6 +533,7 @@ pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Re
     let repo = store.repo();
     let target = resolve_commit(repo, at)?;
     let (path, suffix) = split_line_suffix(file_spec);
+    let path = &repo_relative(repo, path)?;
     let (blob_id, line_count) = blob_at(repo, target, path)?
         .with_context(|| format!("{path:?} not found at {}", &target.to_string()[..12]))?;
     let lines = suffix
@@ -768,9 +769,10 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
     }
     if let Some(spec) = &file {
         let (path, lines) = split_line_suffix(spec);
+        let path = repo_relative(repo, path)?;
         let lines = lines.map(parse_lines).transpose()?;
         threads.retain(|t| {
-            let here = |a: &Anchor| anchor_matches(a, path, lines);
+            let here = |a: &Anchor| anchor_matches(a, &path, lines);
             here(&t.anchor) || moved_anchor(t).as_ref().is_some_and(here)
         });
     }
@@ -1005,9 +1007,10 @@ pub fn anchor_context(
     let target = ObjectId::from_hex(view.at.as_str().as_bytes())?;
     if anchor.diff.base != anchor.diff.head {
         let (base, head) = (anchor.diff.base.as_str(), anchor.diff.head.as_str());
-        let stat = mode == SnippetMode::Stat
-            || (mode == SnippetMode::Auto && anchor.lines.is_none());
-        let mut args = if stat { vec!["diff", "--stat", base, head] } else { vec!["diff", base, head] };
+        let stat =
+            mode == SnippetMode::Stat || (mode == SnippetMode::Auto && anchor.lines.is_none());
+        let mut args =
+            if stat { vec!["diff", "--stat", base, head] } else { vec!["diff", base, head] };
         if let Some(path) = &anchor.path {
             args.extend(["--", path]);
         }
@@ -1062,6 +1065,15 @@ pub fn anchor_context(
     Ok(None)
 }
 
+/// A spec whose first component is `./` or `../` is explicitly a path — the
+/// escape hatch git also honors — never a range or commit.
+fn is_explicit_path(spec: &str) -> bool {
+    matches!(
+        std::path::Path::new(spec).components().next(),
+        Some(std::path::Component::CurDir | std::path::Component::ParentDir)
+    )
+}
+
 /// Sort out `list`'s lone positional: a change (commit or range) or a path
 /// filter. Same rev-vs-path disambiguation as `comment`, but a lone path
 /// means "across all changes" — so anchored paths count as paths even when
@@ -1071,18 +1083,19 @@ fn resolve_list_filters(
     threads: &[ThreadRecord],
     spec: &str,
 ) -> Result<(Option<String>, Option<String>)> {
+    if is_explicit_path(spec) {
+        return Ok((None, Some(spec.to_string())));
+    }
     if spec.contains("..") {
         return Ok((Some(spec.to_string()), None));
     }
-    if let Some(path) = spec.strip_prefix("./") {
-        return Ok((None, Some(path.to_string())));
-    }
     let is_commit = resolve_commit(repo, spec).is_ok();
     let (path, _) = split_line_suffix(spec);
+    let path = repo_relative(repo, path)?;
     let head = resolve_commit(repo, "HEAD")?;
     // A file or directory in HEAD's tree, or any anchored path.
-    let is_file = repo.find_commit(head)?.tree()?.lookup_entry_by_path(path)?.is_some()
-        || threads.iter().any(|t| anchor_matches(&t.anchor, path, None));
+    let is_file = repo.find_commit(head)?.tree()?.lookup_entry_by_path(path.as_str())?.is_some()
+        || threads.iter().any(|t| anchor_matches(&t.anchor, &path, None));
     match (is_commit, is_file) {
         (true, true) => {
             bail!("{spec:?} is both a commit and a path; write ./{spec} to mean the path")
@@ -1116,13 +1129,13 @@ fn moved_anchor(thread: &ThreadRecord) -> Option<Anchor> {
 
 /// Whether a thread's anchor is on `path` (the file itself, or under it as a
 /// directory) and, when a line range is given, overlaps it. Whole-file
-/// anchors overlap any lines.
+/// anchors overlap any lines. The empty path is the repository root (`list .`
+/// from the top level): every path-anchored thread is under it.
 fn anchor_matches(anchor: &Anchor, path: &str, lines: Option<LineRange>) -> bool {
     let path = path.trim_end_matches('/');
-    let on_path = anchor
-        .path
-        .as_deref()
-        .is_some_and(|p| p == path || p.strip_prefix(path).is_some_and(|r| r.starts_with('/')));
+    let on_path = anchor.path.as_deref().is_some_and(|p| {
+        path.is_empty() || p == path || p.strip_prefix(path).is_some_and(|r| r.starts_with('/'))
+    });
     on_path
         && lines.is_none_or(|want| {
             anchor.lines.is_none_or(|have| want.start <= have.end && want.end >= have.start)
@@ -1409,11 +1422,7 @@ fn fetch_and_integrate(store: &Store, remote: &str) -> Result<Option<Integration
 }
 
 fn workdir(store: &Store) -> Result<std::path::PathBuf> {
-    Ok(store
-        .repo()
-        .workdir()
-        .context("this operation requires a non-bare repository")?
-        .to_owned())
+    Ok(store.repo().workdir().context("this operation requires a non-bare repository")?.to_owned())
 }
 
 fn new_event(
@@ -1485,6 +1494,58 @@ fn blob_at(
     Ok(Some((entry.object_id(), count)))
 }
 
+/// A path argument as the repo-relative string anchors store. Like any git
+/// command's, relative paths count from the directory the command was typed
+/// in (git runs external subcommands there), `.` and `..` resolve lexically,
+/// and absolute paths must point inside the worktree.
+fn repo_relative(repo: &gix::Repository, spec: &str) -> Result<String> {
+    use std::path::{Component, Path, PathBuf};
+    let given = Path::new(spec);
+    let full: PathBuf = if given.is_absolute() {
+        let workdir = repo
+            .workdir()
+            .with_context(|| format!("absolute path {spec:?} requires a worktree"))?;
+        let workdir = std::path::absolute(workdir)?;
+        let given = std::path::absolute(given)?;
+        match given.strip_prefix(&workdir) {
+            Ok(inside) => inside.to_path_buf(),
+            // The straight comparison fails under symlinked locations
+            // (e.g. /tmp on macOS); retry with both sides resolved.
+            Err(_) => {
+                let root = std::fs::canonicalize(&workdir)?;
+                std::fs::canonicalize(&given)
+                    .ok()
+                    .and_then(|resolved| resolved.strip_prefix(&root).ok().map(Path::to_path_buf))
+                    .with_context(|| format!("{spec:?} is outside the repository"))?
+            }
+        }
+    } else {
+        match repo.prefix()? {
+            Some(prefix) => prefix.join(given),
+            None => given.to_path_buf(),
+        }
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for component in full.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    bail!("path {spec:?} points outside the repository");
+                }
+            }
+            Component::Normal(part) => match part.to_str() {
+                Some(part) => parts.push(part),
+                None => bail!("invalid UTF-8 in path {spec:?}"),
+            },
+            Component::RootDir | Component::Prefix(_) => {
+                bail!("unexpected component in path {spec:?}")
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 /// Split a trailing `:N` / `:N-M` off a file spec (`src/lib.rs:120-128`),
 /// the same shape `list` and `show` print. The suffix only counts as lines
 /// when it parses as one, so a path that merely contains colons stays intact.
@@ -1503,9 +1564,7 @@ fn parse_lines(spec: &str) -> Result<LineRange> {
         None => (spec, spec),
     };
     let parse = |s: &str| {
-        s.trim()
-            .parse::<u32>()
-            .map_err(|_| anyhow!("invalid lines {spec:?}: expected N or N-M"))
+        s.trim().parse::<u32>().map_err(|_| anyhow!("invalid lines {spec:?}: expected N or N-M"))
     };
     Ok(LineRange { start: parse(start)?, end: parse(end)? })
 }
@@ -1568,11 +1627,7 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .output()
         .with_context(|| format!("failed to run git {args:?}"))?;
     if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        bail!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
