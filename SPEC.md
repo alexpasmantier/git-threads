@@ -114,10 +114,10 @@ Purpose: given an anchor `A` and a target commit `T` (e.g. current branch tip), 
 
 ### 4.2 The algorithm
 
-Evaluate in order; stop at the first success. At every step, a match MUST be **unique** among candidates — two matches means failure of that step, never pick-first.
+Evaluate in order; stop at the first success. At every step, a match MUST be **unique** across all candidate files — two matches, whether in one file or split across files, mean failure of that step, never pick-first.
 
 1. **Blob identity.** If `A.blob` exists in `T`'s tree at `A.path` (or at a rename-detected path, per `git diff -M` between `A.diff.head` and `T`), map lines 1:1. Status: `exact`.
-2. **Exact snippet match.** Search the candidate file (same path, then rename-detected path) for `before + target + after` verbatim. Status: `relocated`.
+2. **Exact snippet match.** Search the candidate files for `before + target + after` verbatim. Status: `relocated`.
 3. **Fuzzed match.** Retry with fuzz level *f* = 1, 2, 3: drop *f* outer context lines from each of `before`/`after` (semantics of `git apply` fuzz). Then retry levels 0–3 with trailing-whitespace-insensitive line comparison. Status: `fuzzy(f)`.
 4. **Outdated.** No unique match. Render the thread against its canonical `A.diff.head` using the derived snippet. Status: `outdated`.
 
@@ -125,7 +125,7 @@ Candidate files in v1 are limited to `A.path` plus rename-detected paths. Cross-
 
 The algorithm as written applies to `range` anchors. `commit` anchors are never re-anchored — they describe a whole change, which exists only in its own diff. `file` anchors use presence, not content: identical blob at a candidate path → `exact`; a candidate path present with different content → `relocated`; otherwise `outdated`.
 
-Two consequences implementations may rely on: raising the fuzz level only relaxes the pattern, so ambiguity at one level implies ambiguity at every later level — the search may stop at the first ambiguous level. And a truncated snippet's middle is unconstrained by line matching, so a byte-exact match MUST be confirmed against the stored range hash; the whitespace-insensitive pass cannot be, which is one reason its results are `fuzzy(f)`, never `relocated`.
+Ambiguity is monotone under *relaxation*: raising the fuzz level within a comparison mode only drops constraint lines, and the whitespace-insensitive mode relaxes the byte-exact one at the same fuzz level — so ambiguity at byte-exact fuzz *f* implies ambiguity at byte-exact levels above *f* and at whitespace-insensitive levels at or above *f*, and whitespace-insensitive ambiguity implies ambiguity at every later level. The two axes are not totally ordered, though: byte-exact ambiguity at fuzz 3 (a duplicated bare target) says nothing about whitespace-insensitive fuzz 0, whose fuller context can still hold a unique match. The search therefore skips exactly the relaxations of an ambiguous level and nothing more: byte-exact ambiguity at fuzz *f* jumps to the whitespace-insensitive levels below *f*; whitespace-insensitive ambiguity ends the search. (Equivalently: evaluate all eight levels in order, treating an ambiguous level as a failed one — the skips are pure optimization.) Separately, a truncated snippet's middle is unconstrained by line matching, so a byte-exact match MUST be confirmed against the stored range hash; the whitespace-insensitive pass cannot be, which is one reason its results are `fuzzy(f)`, never `relocated`.
 
 Re-anchor results are pure functions of `(A, T)` — both immutable — so clients SHOULD cache them locally (§7). Caches are never part of the shared format.
 

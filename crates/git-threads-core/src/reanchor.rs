@@ -38,33 +38,102 @@ impl fmt::Display for ReanchorStatus {
 }
 
 /// Find the unique new position of `snippet` in `content` (§4.2 steps 2–3).
+/// Single-file convenience over [`locate_snippet_among`].
+pub fn locate_snippet(snippet: &Snippet, content: &str) -> Option<(LineRange, ReanchorStatus)> {
+    locate_snippet_among(snippet, [content]).map(|(_, lines, status)| (lines, status))
+}
+
+/// Find the unique new position of `snippet` among `candidates` (§4.2 steps
+/// 2–3), returning the index of the candidate that matched. Uniqueness is
+/// judged across all candidates at once: a match in each of two files is as
+/// ambiguous as two matches in one file.
 ///
 /// Byte-exact comparison is tried first (fuzz 0 → `Relocated`, fuzz 1–3 →
 /// `Fuzzy`), then trailing-whitespace-insensitive comparison (fuzz 0–3, all
-/// `Fuzzy`). Two matches at any level is ambiguity, and since every later
-/// level only relaxes the pattern, ambiguity can never resolve — the search
-/// stops immediately ("never pick-first").
-pub fn locate_snippet(snippet: &Snippet, content: &str) -> Option<(LineRange, ReanchorStatus)> {
-    let lines: Vec<&str> = content.lines().collect();
-    for ws_insensitive in [false, true] {
-        for fuzz in 0..=MAX_FUZZ {
-            match find_matches(snippet, &lines, fuzz, ws_insensitive) {
+/// `Fuzzy`). Two matches at a level fail that level, and — since raising the
+/// fuzz level or dropping whitespace-sensitivity only relaxes the pattern —
+/// every relaxation of an ambiguous level is skipped ("never pick-first"):
+/// byte-exact ambiguity at fuzz `f` rules out byte-exact levels above `f`
+/// and whitespace-insensitive levels at or above `f`; whitespace-insensitive
+/// ambiguity ends the search. The axes are not totally ordered, though —
+/// byte-exact ambiguity at fuzz 3 (a bare target duplicated) says nothing
+/// about whitespace-insensitive fuzz 0, whose fuller context can still
+/// disambiguate — so the whitespace pass keeps running below the ambiguous
+/// fuzz level.
+pub fn locate_snippet_among<'a>(
+    snippet: &Snippet,
+    candidates: impl IntoIterator<Item = &'a str>,
+) -> Option<(usize, LineRange, ReanchorStatus)> {
+    let files: Vec<Vec<&str>> = candidates.into_iter().map(|c| c.lines().collect()).collect();
+    // A level's verdict across all candidate files: ambiguity in any file, or
+    // unique matches in two files, is ambiguity of the level.
+    let level = |fuzz: usize, ws_insensitive: bool| -> Level {
+        let mut unique: Option<(usize, usize, usize)> = None;
+        for (index, lines) in files.iter().enumerate() {
+            match find_matches(snippet, lines, fuzz, ws_insensitive) {
                 Matches::None => {}
-                Matches::Ambiguous => return None,
+                Matches::Ambiguous => return Level::Ambiguous,
                 Matches::Unique { pattern_start, before_len } => {
-                    let start = (pattern_start + before_len) as u32 + 1;
-                    let end = start + snippet.target.line_count() as u32 - 1;
-                    let status = if !ws_insensitive && fuzz == 0 {
-                        ReanchorStatus::Relocated
-                    } else {
-                        ReanchorStatus::Fuzzy(fuzz as u8)
-                    };
-                    return Some((LineRange { start, end }, status));
+                    if unique.is_some() {
+                        return Level::Ambiguous;
+                    }
+                    unique = Some((index, pattern_start, before_len));
                 }
+            }
+        }
+        match unique {
+            Some((candidate, pattern_start, before_len)) => {
+                Level::Unique { candidate, pattern_start, before_len }
+            }
+            None => Level::None,
+        }
+    };
+    let position = |pattern_start: usize, before_len: usize, status: ReanchorStatus| {
+        let start = (pattern_start + before_len) as u32 + 1;
+        let end = start + snippet.target.line_count() as u32 - 1;
+        (LineRange { start, end }, status)
+    };
+
+    // Byte-exact pass; on ambiguity at fuzz `f`, only whitespace-insensitive
+    // levels below `f` can still hold a unique match.
+    let mut ws_levels = MAX_FUZZ + 1;
+    for fuzz in 0..=MAX_FUZZ {
+        match level(fuzz, false) {
+            Level::None => {}
+            Level::Ambiguous => {
+                ws_levels = fuzz;
+                break;
+            }
+            Level::Unique { candidate, pattern_start, before_len } => {
+                let status = if fuzz == 0 {
+                    ReanchorStatus::Relocated
+                } else {
+                    ReanchorStatus::Fuzzy(fuzz as u8)
+                };
+                let (lines, status) = position(pattern_start, before_len, status);
+                return Some((candidate, lines, status));
+            }
+        }
+    }
+    for fuzz in 0..ws_levels {
+        match level(fuzz, true) {
+            Level::None => {}
+            Level::Ambiguous => break,
+            Level::Unique { candidate, pattern_start, before_len } => {
+                let (lines, status) =
+                    position(pattern_start, before_len, ReanchorStatus::Fuzzy(fuzz as u8));
+                return Some((candidate, lines, status));
             }
         }
     }
     None
+}
+
+/// One (fuzz, comparison-mode) level's verdict across all candidate files.
+enum Level {
+    None,
+    Unique { candidate: usize, pattern_start: usize, before_len: usize },
+    Ambiguous,
 }
 
 enum Matches {
@@ -203,10 +272,8 @@ mod tests {
     fn deleted_target_is_no_match() {
         let original = lines(1..=20);
         let snippet = snippet_of(&original, 10, 12);
-        let edited = original
-            .replace("line 10\n", "")
-            .replace("line 11\n", "")
-            .replace("line 12\n", "");
+        let edited =
+            original.replace("line 10\n", "").replace("line 11\n", "").replace("line 12\n", "");
         assert!(locate_snippet(&snippet, &edited).is_none());
     }
 
@@ -218,6 +285,39 @@ mod tests {
         let (found, status) = locate_snippet(&snippet, &edited).unwrap();
         assert_eq!(status, ReanchorStatus::Relocated);
         assert_eq!(found, LineRange { start: 4, end: 4 });
+    }
+
+    #[test]
+    fn byte_exact_ambiguity_does_not_abort_the_whitespace_pass() {
+        // The anchored context carries trailing whitespace that a formatter
+        // has since stripped, and the (unchanged) target line also appears
+        // bare elsewhere. Byte-exact matching fails at fuzz 0-2 (whitespace)
+        // and is ambiguous at fuzz 3 (two bare targets) — but that ambiguity
+        // says nothing about the whitespace-insensitive full-context level,
+        // which still identifies the true location uniquely.
+        let original = "before one   \nbefore two \nbefore three  \nthe target\nafter one \nafter two   \nafter three \n";
+        let snippet = snippet_of(original, 4, 4);
+        let formatted = "before one\nbefore two\nbefore three\nthe target\nafter one\nafter two\nafter three\nunrelated\nthe target\nsomething else\n";
+        let (found, status) =
+            locate_snippet(&snippet, formatted).expect("unique ws-insensitive match");
+        assert_eq!(status, ReanchorStatus::Fuzzy(0));
+        assert_eq!(found, LineRange { start: 4, end: 4 });
+    }
+
+    #[test]
+    fn matches_split_across_candidates_are_ambiguous() {
+        let original = lines(1..=20);
+        let snippet = snippet_of(&original, 10, 12);
+        // The snippet region relocated within one candidate: unique.
+        let shifted = format!("{}{}", "new\n".repeat(5), original);
+        let (index, found, status) =
+            locate_snippet_among(&snippet, [shifted.as_str(), "unrelated\n"]).unwrap();
+        assert_eq!((index, status), (0, ReanchorStatus::Relocated));
+        assert_eq!(found, LineRange { start: 15, end: 17 });
+
+        // The same region present in both candidates: as ambiguous as two
+        // matches in one file — never pick-first.
+        assert!(locate_snippet_among(&snippet, [shifted.as_str(), original.as_str()]).is_none());
     }
 
     #[test]

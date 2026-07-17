@@ -6,7 +6,7 @@
 use crate::store::Store;
 use anyhow::{Context, Result};
 use git_threads_core::{
-    Anchor, EventId, LineRange, ReanchorStatus, derive_snippet, locate_snippet,
+    Anchor, EventId, LineRange, ReanchorStatus, derive_snippet, locate_snippet_among,
     to_canonical_json,
 };
 use gix::ObjectId;
@@ -107,13 +107,14 @@ pub fn reanchor(store: &Store, anchor: &Anchor, target: ObjectId) -> Result<Rean
         .context("anchor with a path but no blob")
         .and_then(|b| Ok(ObjectId::from_hex(b.as_str().as_bytes())?))?;
 
-    // Candidates in order: the anchored path, then its rename-detected
-    // successor. Rename detection only makes sense when the anchored path
-    // is gone from the target tree (`git diff -M` reports renames of
-    // deleted paths, so a surviving path can never have one) — which also
-    // keeps the subprocess it shells out to off the common path. It is
+    // Candidates: the anchored path, plus its rename-detected successor.
+    // Rename detection only makes sense when the anchored path is gone
+    // from the target tree (`git diff -M` reports renames of deleted
+    // paths, so a surviving path can never have one) — which also keeps
+    // the subprocess it shells out to off the common path. It is
     // best-effort: a failure (e.g. the anchor's head missing locally) just
-    // means no rename candidate.
+    // means no rename candidate. At every step below, a match must be
+    // unique across ALL candidates (SPEC.md §4.2) — never pick-first.
     let mut candidates = vec![path.to_string()];
     if blob_at(repo, target, path)?.is_none() {
         let anchor_head = ObjectId::from_hex(anchor.diff.head.as_str().as_bytes())?;
@@ -121,47 +122,55 @@ pub fn reanchor(store: &Store, anchor: &Anchor, target: ObjectId) -> Result<Rean
             candidates.push(renamed);
         }
     }
-
-    // Step 1: blob identity — the anchored file version exists unchanged.
-    for candidate in &candidates {
-        if blob_at(repo, target, candidate)? == Some(anchor_blob) {
-            return Ok(Reanchor::Located {
-                path: candidate.clone(),
-                lines: anchor.lines,
-                status: ReanchorStatus::Exact,
-            });
+    // The candidates that exist in the target tree, with their blobs.
+    let mut present: Vec<(String, ObjectId)> = Vec::new();
+    for candidate in candidates {
+        if let Some(blob) = blob_at(repo, target, &candidate)? {
+            present.push((candidate, blob));
         }
     }
 
+    // Step 1: blob identity — the anchored file version exists unchanged.
+    // Two identical copies fail the step; the snippet search below then sees
+    // the same ambiguity and lands on outdated.
+    let mut identical = present.iter().filter(|(_, blob)| *blob == anchor_blob);
+    if let (Some((path, _)), None) = (identical.next(), identical.next()) {
+        return Ok(Reanchor::Located {
+            path: path.clone(),
+            lines: anchor.lines,
+            status: ReanchorStatus::Exact,
+        });
+    }
+
     // File-kind anchors have no lines to match; the path surviving (with
-    // changed content) is the best remaining signal.
+    // changed content) is the best remaining signal — if it is unique.
     let Some(lines) = anchor.lines else {
-        for candidate in &candidates {
-            if blob_at(repo, target, candidate)?.is_some() {
-                return Ok(Reanchor::Located {
-                    path: candidate.clone(),
-                    lines: None,
-                    status: ReanchorStatus::Relocated,
-                });
-            }
-        }
-        return Ok(Reanchor::Outdated);
+        return Ok(match present.as_slice() {
+            [(path, _)] => Reanchor::Located {
+                path: path.clone(),
+                lines: None,
+                status: ReanchorStatus::Relocated,
+            },
+            _ => Reanchor::Outdated,
+        });
     };
 
-    // Steps 2–3: search each candidate file for the derived snippet.
+    // Steps 2–3: search the candidate files for the derived snippet.
     let anchor_content = blob_content(repo, anchor_blob)?;
     let Some(snippet) = derive_snippet(&anchor_content, lines) else {
         // Anchor and blob disagree; §3.1 says flag, never guess.
         return Ok(Reanchor::Outdated);
     };
-    for candidate in &candidates {
-        let Some(blob) = blob_at(repo, target, candidate)? else {
-            continue;
-        };
-        let content = blob_content(repo, blob)?;
-        if let Some((lines, status)) = locate_snippet(&snippet, &content) {
-            return Ok(Reanchor::Located { path: candidate.clone(), lines: Some(lines), status });
-        }
+    let contents =
+        present.iter().map(|(_, blob)| blob_content(repo, *blob)).collect::<Result<Vec<_>>>()?;
+    if let Some((index, lines, status)) =
+        locate_snippet_among(&snippet, contents.iter().map(String::as_str))
+    {
+        return Ok(Reanchor::Located {
+            path: present[index].0.clone(),
+            lines: Some(lines),
+            status,
+        });
     }
     Ok(Reanchor::Outdated)
 }
@@ -171,14 +180,7 @@ fn detect_rename(store: &Store, from: ObjectId, to: ObjectId, path: &str) -> Opt
     let dir = store.repo().workdir().unwrap_or_else(|| store.repo().path()).to_owned();
     let out = crate::commands::git(
         &dir,
-        &[
-            "diff",
-            "-M",
-            "--name-status",
-            "--diff-filter=R",
-            &from.to_string(),
-            &to.to_string(),
-        ],
+        &["diff", "-M", "--name-status", "--diff-filter=R", &from.to_string(), &to.to_string()],
     )
     .ok()?;
     for line in out.lines() {

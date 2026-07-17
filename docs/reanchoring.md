@@ -30,8 +30,9 @@ boundary, so consumers without git object access (static HTML, email) can render
 
 ## The algorithm
 
-Evaluated strictly in order; first success wins. At every step a match must be **unique** —
-two candidate positions is failure of that step, never pick-first.
+Evaluated strictly in order; first success wins. At every step a match must be **unique across
+all candidate files** — two positions, in one file or split across files, fail that step,
+never pick-first.
 
 ### Step 1 — blob identity → `exact`
 
@@ -87,11 +88,17 @@ not content: identical blob → `exact`; candidate path present with different c
 
 ## Implementation notes
 
-**Ambiguity short-circuits.** Raising the fuzz level only ever *relaxes* the needle (drops
-constraint lines), so every position matching at level `f` still matches at `f + 1`. Two
-matches at any level therefore means two matches at every later level — the search can stop at
-the first ambiguous step instead of grinding through the rest. (Also why ambiguity can't be
-"resolved" by fuzzing harder.)
+**Ambiguity short-circuits — but only along relaxations.** Raising the fuzz level within a
+comparison mode only ever *relaxes* the needle (drops constraint lines), and the
+whitespace-insensitive mode relaxes byte-exact at the same fuzz level — every position
+matching before still matches after, so ambiguity survives every relaxation. (Also why
+ambiguity can't be "resolved" by fuzzing harder.) The two axes are *not* totally ordered,
+though: a bare target duplicated in the file makes byte-exact fuzz 3 ambiguous, yet
+whitespace-insensitive fuzz 0 — full context, compared loosely — can still hold a unique
+match. That's the formatter case: trailing whitespace changed on every context line, target
+untouched. So the search skips exactly the relaxations of an ambiguous level and nothing
+more: byte-exact ambiguity at fuzz `f` jumps to the whitespace-insensitive levels below `f`,
+and whitespace-insensitive ambiguity ends the search.
 
 **Truncated needles verify the hash.** A >20-line target's middle is unconstrained by line
 matching — the needle only pins head, tail, and the gap length. In byte-exact mode the stored

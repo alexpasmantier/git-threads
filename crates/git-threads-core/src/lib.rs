@@ -29,5 +29,5 @@ pub use canonical::to_canonical_json;
 pub use event::{Author, Event, EventKind, Timestamp};
 pub use fold::{FoldedEvent, FoldedThread, fold_thread};
 pub use id::{EventId, GitOid, ThreadId};
-pub use reanchor::{ReanchorStatus, locate_snippet};
+pub use reanchor::{ReanchorStatus, locate_snippet, locate_snippet_among};
 pub use snippet::{Snippet, SnippetTarget, derive_snippet};
