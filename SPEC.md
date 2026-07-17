@@ -60,7 +60,7 @@ Every event is one JSON document:
 
 ### 2.3 Identifiers
 
-- **Event ID** = lowercase hex SHA-256 of the event's canonical JSON serialization (§6), truncated to 40 characters. The event's filename is its ID. Content addressing makes merges idempotent: the same event always lands at the same path.
+- **Event ID** = lowercase hex SHA-256 of the event's canonical JSON serialization (§6), truncated to 40 characters. The event's filename is its ID. Content addressing makes merges idempotent: the same event always lands at the same path. Readers MUST verify that a stored event's bytes hash to its filename and treat files that don't as malformed (§10) — trusting the name alone would let a same-path overwrite put new content under an existing event ID.
 - **Thread ID** = the event ID of its root `comment`.
 - Event and thread IDs are defined by this format alone — never by the storage backend's hashing. Object IDs appearing in anchors (`diff`, `blob`) are opaque hex strings scoped to the repository's storage backend; a backend hash migration (e.g. git SHA-1 → SHA-256) changes those, but can never invalidate event IDs or the references between events.
 
@@ -217,6 +217,7 @@ Back-of-envelope for a 500k-line repo, 50 contributors, ~5,000 reviews/year (~12
 
 - Every document carries `"v"`. Readers MUST accept documents with unknown fields and SHOULD surface (not crash on) unknown major versions.
 - Additive changes (new optional fields, new event types) do not bump `v`. Semantic changes to the fold, the algorithm, or canonical serialization do.
+- **Malformed data never poisons the read.** The data ref is shared and append-only, so a reader that hard-fails on one bad file — a buggy or hostile writer's — is broken in every clone, forever. Readers MUST skip, with a diagnostic, files that fail to parse, event files whose bytes don't hash to their filename (§2.3), and thread directories with no readable anchor — and render everything else. Writers MUST still validate everything they write.
 
 ---
 

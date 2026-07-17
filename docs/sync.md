@@ -100,6 +100,9 @@ One paranoid corner: if malformed data *does* put different content at the same 
 hand-edited event file, a buggy tool), the union picks deterministically (trees over blobs,
 then larger object ID) rather than erroring — because all replicas picking the *same* winner
 keeps the network convergent, while an error would wedge every publish that touches the path.
+What the pick can't do is forge: readers verify that an event's stored bytes hash to its
+filename (SPEC.md §2.3), so content swapped in under an existing event ID is skipped at read
+time, never displayed as the original.
 
 Append-only discipline follows from all this: history on the threads ref is never rewritten
 and the ref is never force-pushed. Rewriting would orphan events that other clones' merges

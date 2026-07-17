@@ -44,6 +44,16 @@ pub struct Store {
     repo: gix::Repository,
 }
 
+/// A thread's events as read from a snapshot tree.
+type ThreadEvents = Vec<(EventId, Event)>;
+
+/// Reader-side warning about shared data that doesn't hold up. On stderr: a
+/// side note to whatever command is running, matching how opportunistic
+/// integration reports.
+fn warn(message: std::fmt::Arguments<'_>) {
+    eprintln!("threads: warning: {message}");
+}
+
 /// A thread as read from the snapshot tree, with unpublished drafts overlaid.
 #[derive(Clone)]
 pub struct ThreadRecord {
@@ -106,7 +116,8 @@ impl Store {
     }
 
     pub fn open(path: &Path) -> Result<Self> {
-        let repo = gix::open(path).with_context(|| format!("failed to open repo at {}", path.display()))?;
+        let repo = gix::open(path)
+            .with_context(|| format!("failed to open repo at {}", path.display()))?;
         Ok(Store { repo })
     }
 
@@ -217,10 +228,7 @@ impl Store {
 
     /// A single thread by ID (published state plus drafts), if present.
     pub fn read_thread(&self, id: &ThreadId) -> Result<Option<ThreadRecord>> {
-        Ok(self
-            .threads()?
-            .into_iter()
-            .find(|thread| thread.id == *id))
+        Ok(self.threads()?.into_iter().find(|thread| thread.id == *id))
     }
 
     fn collect_threads(
@@ -236,9 +244,16 @@ impl Store {
             let shard_tree = self.repo.find_tree(shard_entry?.object_id())?;
             for thread_entry in shard_tree.iter() {
                 let thread_entry = thread_entry?;
-                let name = std::str::from_utf8(thread_entry.filename())
-                    .context("non-UTF-8 thread directory name")?;
-                let id = EventId::from_hex(name)?;
+                let Some(id) = std::str::from_utf8(thread_entry.filename())
+                    .ok()
+                    .and_then(|name| EventId::from_hex(name).ok())
+                else {
+                    warn(format_args!(
+                        "skipping thread directory {:?}: not a thread ID",
+                        thread_entry.filename()
+                    ));
+                    continue;
+                };
                 let (anchor, events) = self.read_thread_dir(&id, thread_entry.object_id())?;
                 match out.get_mut(&id) {
                     Some(record) => {
@@ -252,9 +267,12 @@ impl Store {
                         }
                     }
                     None => {
-                        let anchor = anchor.ok_or_else(|| {
-                            anyhow!("thread {id} has no anchor.json and no published state")
-                        })?;
+                        let Some(anchor) = anchor else {
+                            warn(format_args!(
+                                "skipping thread {id}: no readable anchor.json and no published state"
+                            ));
+                            continue;
+                        };
                         let drafts = if draft {
                             events.iter().map(|(id, _)| id.clone()).collect()
                         } else {
@@ -327,7 +345,13 @@ impl Store {
         if let Some(tip) = drafts_tip {
             parents.extend(self.repo.find_commit(tip)?.parent_ids().map(|id| id.detach()));
         }
-        self.commit(DRAFTS_REF, "threads: drafts", new_tree, parents.into_iter().collect(), drafts_tip)
+        self.commit(
+            DRAFTS_REF,
+            "threads: drafts",
+            new_tree,
+            parents.into_iter().collect(),
+            drafts_tip,
+        )
     }
 
     /// Promote all drafts into `refs/threads/data` as one commit (SPEC.md
@@ -352,10 +376,7 @@ impl Store {
         let mut parents: Vec<ObjectId> = Vec::new();
         parents.extend(tip);
         parents.extend(
-            drafts_commit
-                .parent_ids()
-                .map(|id| id.detach())
-                .filter(|pin| Some(*pin) != tip),
+            drafts_commit.parent_ids().map(|id| id.detach()).filter(|pin| Some(*pin) != tip),
         );
         let message = format!("threads: {events} events in {threads} threads");
         self.commit(DATA_REF, &message, merged_tree, parents, tip)?;
@@ -378,10 +399,7 @@ impl Store {
             bail!("{event} is not a draft");
         };
         let dir_tree = self.repo.find_tree(dir_entry.object_id())?;
-        if dir_tree
-            .lookup_entry_by_path(format!("events/{event}.json"))?
-            .is_none()
-        {
+        if dir_tree.lookup_entry_by_path(format!("events/{event}.json"))?.is_none() {
             bail!("{event} is not a draft");
         }
         let has_anchor = dir_tree.lookup_entry_by_path("anchor.json")?.is_some();
@@ -407,12 +425,8 @@ impl Store {
             self.delete_ref(DRAFTS_REF)?;
         } else {
             // Retention pins are kept as-is; a stale pin is harmless.
-            let parents = self
-                .repo
-                .find_commit(drafts_tip)?
-                .parent_ids()
-                .map(|id| id.detach())
-                .collect();
+            let parents =
+                self.repo.find_commit(drafts_tip)?.parent_ids().map(|id| id.detach()).collect();
             self.commit(DRAFTS_REF, "threads: drafts", new_tree, parents, Some(drafts_tip))?;
         }
         Ok(removed)
@@ -518,7 +532,9 @@ impl Store {
         let committer = self
             .repo
             .committer()
-            .ok_or_else(|| anyhow!("no committer identity configured (set user.name and user.email)"))?
+            .ok_or_else(|| {
+                anyhow!("no committer identity configured (set user.name and user.email)")
+            })?
             .map_err(|e| anyhow!("invalid committer identity: {e}"))?
             .to_owned()?;
         let commit = gix::objs::Commit {
@@ -593,10 +609,13 @@ impl Store {
                 };
                 for entry in events_tree.iter() {
                     let entry = entry?;
-                    let name = std::str::from_utf8(entry.filename())
-                        .context("non-UTF-8 event filename")?;
-                    if let Some(stem) = name.strip_suffix(".json") {
-                        out.insert(EventId::from_hex(stem)?);
+                    // Junk names are skipped here as they are on read.
+                    if let Some(id) = std::str::from_utf8(entry.filename())
+                        .ok()
+                        .and_then(|name| name.strip_suffix(".json"))
+                        .and_then(|stem| EventId::from_hex(stem).ok())
+                    {
+                        out.insert(id);
                     }
                 }
             }
@@ -631,32 +650,64 @@ impl Store {
         Ok((anchors, events, threads))
     }
 
-    /// Anchor (if present) and events of one thread directory.
+    /// Anchor (if readable) and events of one thread directory.
+    ///
+    /// The data ref is shared and append-only, so a malformed file — a buggy
+    /// or hostile writer's — would otherwise poison every reader forever.
+    /// Anything that doesn't hold up is skipped with a warning, never fatal:
+    /// unparseable documents, misnamed files, and events whose stored bytes
+    /// don't hash to their filename (the SPEC.md §2.3 invariant — trusting
+    /// the name alone would let a same-path overwrite put words under
+    /// someone else's event ID).
     fn read_thread_dir(
         &self,
         id: &ThreadId,
         tree_id: ObjectId,
-    ) -> Result<(Option<Anchor>, Vec<(EventId, Event)>)> {
+    ) -> Result<(Option<Anchor>, ThreadEvents)> {
         let tree = self.repo.find_tree(tree_id)?;
         let anchor = match tree.lookup_entry_by_path("anchor.json")? {
-            Some(entry) => Some(
-                serde_json::from_slice(&self.repo.find_blob(entry.object_id())?.data)
-                    .with_context(|| format!("invalid anchor.json in thread {id}"))?,
-            ),
+            Some(entry) => {
+                match serde_json::from_slice(&self.repo.find_blob(entry.object_id())?.data) {
+                    Ok(anchor) => Some(anchor),
+                    Err(err) => {
+                        warn(format_args!("unreadable anchor.json in thread {id}: {err}"));
+                        None
+                    }
+                }
+            }
             None => None,
         };
         let mut events = Vec::new();
         if let Some(events_tree) = self.subtree(&tree, "events")? {
             for entry in events_tree.iter() {
                 let entry = entry?;
-                let name = std::str::from_utf8(entry.filename()).context("non-UTF-8 event filename")?;
-                let Some(stem) = name.strip_suffix(".json") else {
+                let Some(stem) = std::str::from_utf8(entry.filename())
+                    .ok()
+                    .and_then(|name| name.strip_suffix(".json"))
+                else {
                     continue;
                 };
-                let event_id = EventId::from_hex(stem)?;
-                let event: Event = serde_json::from_slice(&self.repo.find_blob(entry.object_id())?.data)
-                    .with_context(|| format!("invalid event {event_id} in thread {id}"))?;
-                events.push((event_id, event));
+                let Ok(event_id) = EventId::from_hex(stem) else {
+                    warn(format_args!(
+                        "skipping event with malformed name {stem:?} in thread {id}"
+                    ));
+                    continue;
+                };
+                let blob = self.repo.find_blob(entry.object_id())?;
+                if EventId::compute(&blob.data) != event_id {
+                    warn(format_args!(
+                        "skipping event {event_id} in thread {id}: content does not hash to its filename (SPEC.md §2.3)"
+                    ));
+                    continue;
+                }
+                match serde_json::from_slice(&blob.data) {
+                    Ok(event) => events.push((event_id, event)),
+                    Err(err) => {
+                        warn(format_args!(
+                            "skipping unreadable event {event_id} in thread {id}: {err}"
+                        ));
+                    }
+                }
             }
         }
         Ok((anchor, events))
@@ -793,10 +844,7 @@ impl Store {
             let mut entries = BTreeMap::new();
             for entry in tree.iter() {
                 let entry = entry?;
-                entries.insert(
-                    entry.filename().to_owned(),
-                    (entry.mode(), entry.object_id()),
-                );
+                entries.insert(entry.filename().to_owned(), (entry.mode(), entry.object_id()));
             }
             Ok(entries)
         };
@@ -817,7 +865,8 @@ impl Store {
                     } else {
                         // Malformed data: same path, different content.
                         // Deterministic pick so every replica converges.
-                        let ours_wins = (our_mode.is_tree(), our_oid) > (their_mode.is_tree(), their_oid);
+                        let ours_wins =
+                            (our_mode.is_tree(), our_oid) > (their_mode.is_tree(), their_oid);
                         if ours_wins { (our_mode, our_oid) } else { (their_mode, their_oid) }
                     }
                 }

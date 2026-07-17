@@ -11,12 +11,8 @@ use std::process::Command;
 use git_threads::store::{Append, Batch, NewThread, Store};
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("failed to run git");
+    let output =
+        Command::new("git").arg("-C").arg(dir).args(args).output().expect("failed to run git");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -62,10 +58,7 @@ fn event(kind: EventKind, ts: &str) -> Event {
     Event {
         v: 1,
         kind,
-        author: Author {
-            name: "Test".into(),
-            email: "test@example.com".into(),
-        },
+        author: Author { name: "Test".into(), email: "test@example.com".into() },
         ts: Timestamp::parse(ts).unwrap(),
         body: None,
         in_reply_to: None,
@@ -138,10 +131,8 @@ fn on_disk_layout_is_sharded_and_canonical() {
     .unwrap();
     assert_eq!(on_disk, expected);
 
-    let event_path = format!(
-        "refs/threads/data:threads/{}/{tid}/events/{tid}.json",
-        &tid.as_str()[..2]
-    );
+    let event_path =
+        format!("refs/threads/data:threads/{}/{tid}/events/{tid}.json", &tid.as_str()[..2]);
     let event_on_disk = git(dir.path(), &["cat-file", "-p", &event_path]);
     assert_eq!(event_on_disk.as_bytes(), root.canonical_json().unwrap());
 }
@@ -176,10 +167,7 @@ fn append_chains_onto_previous_tip() {
     let second_tip = store
         .write(&Batch {
             new_threads: vec![],
-            appends: vec![Append {
-                thread: thread_id.clone(),
-                events: vec![reply.clone()],
-            }],
+            appends: vec![Append { thread: thread_id.clone(), events: vec![reply.clone()] }],
         })
         .unwrap();
     assert_ne!(first_tip, second_tip);
@@ -208,6 +196,85 @@ fn append_to_unknown_thread_fails() {
         }],
     });
     assert!(result.is_err());
+}
+
+/// Add a blob at `path` on top of `refs/threads/data`'s tip tree, bypassing
+/// the store — the way a buggy or hostile writer would.
+fn inject_file(dir: &Path, path: &str, content: &str) {
+    let blob = {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["hash-object", "-w", "--stdin"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.take().unwrap().write_all(content.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("hash-object");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    git(dir, &["read-tree", "refs/threads/data^{tree}"]);
+    git(dir, &["update-index", "--add", "--cacheinfo", &format!("100644,{blob},{path}")]);
+    let tree = git(dir, &["write-tree"]);
+    let tip = git(dir, &["rev-parse", "refs/threads/data"]);
+    let commit = git(dir, &["commit-tree", &tree, "-p", &tip, "-m", "inject"]);
+    git(dir, &["update-ref", "refs/threads/data", &commit]);
+}
+
+#[test]
+fn malformed_files_are_skipped_not_fatal() {
+    let (dir, base, head) = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let (batch, root) = new_thread_batch(&base, &head, "the valid thread");
+    store.write(&batch).unwrap();
+    let valid_id = root.id().unwrap();
+
+    // A thread directory whose anchor.json is garbage, with a garbage event.
+    let bogus = "ff".repeat(20);
+    inject_file(dir.path(), &format!("threads/ff/{bogus}/anchor.json"), "not json");
+    inject_file(dir.path(), &format!("threads/ff/{bogus}/events/{bogus}.json"), "{}");
+    // A garbage event inside the valid thread.
+    let junk =
+        format!("threads/{}/{valid_id}/events/{}.json", &valid_id.as_str()[..2], "e".repeat(40));
+    inject_file(dir.path(), &junk, "not json either");
+
+    // The valid thread still reads; the junk is skipped, not fatal.
+    let threads = store.threads().expect("read must survive malformed files");
+    assert_eq!(threads.len(), 1);
+    let thread = &threads[0];
+    assert_eq!(thread.id, valid_id);
+    assert_eq!(thread.events.len(), 1, "junk event skipped");
+}
+
+#[test]
+fn event_content_must_hash_to_its_filename() {
+    let (dir, base, head) = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let (batch, root) = new_thread_batch(&base, &head, "say what I wrote");
+    store.write(&batch).unwrap();
+    let thread_id = root.id().unwrap();
+
+    // Overwrite the root event's blob in place: valid JSON, same author, but
+    // different words — the filename no longer matches the content hash.
+    let mut forged = root.clone();
+    forged.body = Some("something the author never said".into());
+    let forged_bytes = String::from_utf8(forged.canonical_json().unwrap()).unwrap();
+    let path = format!("threads/{}/{thread_id}/events/{thread_id}.json", &thread_id.as_str()[..2]);
+    inject_file(dir.path(), &path, &forged_bytes);
+
+    // The forged content is rejected; the thread survives without it.
+    let thread = store.read_thread(&thread_id).unwrap();
+    let bodies: Vec<String> =
+        thread.into_iter().flat_map(|t| t.events).filter_map(|(_, e)| e.body).collect();
+    assert!(
+        !bodies.iter().any(|b| b.contains("never said")),
+        "forged event content must not be attributed to its original ID: {bodies:?}"
+    );
 }
 
 #[test]
