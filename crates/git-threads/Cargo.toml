@@ -1,10 +1,14 @@
 [package]
 name = "git-threads"
 description = "Anchored, threaded discussions stored in git — portable review conversations, annotations, and archaeology"
+readme = "../../README.md"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 git-threads-core.workspace = true

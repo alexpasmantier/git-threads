@@ -355,7 +355,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 let stayed = |ids: &[git_threads_core::ThreadId], why: &str| {
                     if !ids.is_empty() {
-                        let ids: Vec<&str> = ids.iter().map(|id| short(id)).collect();
+                        let ids: Vec<&str> = ids.iter().map(short).collect();
                         println!("left in place — {why}: {}", ids.join(", "));
                     }
                 };

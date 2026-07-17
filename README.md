@@ -47,20 +47,24 @@ recomputed against whatever commit you're looking at.
 
 ## Status
 
-Experimental. The format and CLI cover the core loop — comment, reply, edit, delete, resolve,
-move, discard, show, list (with `--grep` search and `--json` output), status, a local inbox
+The format and CLI cover the whole loop — comment, reply, edit, delete, resolve, move,
+discard, show, list (with `--grep` search and `--json` output), status, a local inbox
 (`list --new`), the git-shaped pull/commit/push cycle with drafts, session batching,
 and re-anchoring, plus a GitHub importer that liberates PR review history into the
 repository. Threads survive rebases and squash-merges: listings match rewritten commits
 by patch-id, `move --orphans` re-pins what that can't reach, and `list --pr` finds an
-imported PR's history no matter what happened to its branch. The spec is a draft and may
-still change.
+imported PR's history no matter what happened to its branch. The test suite exercises
+every subsystem against real repositories; CI runs it on Linux, macOS, and Windows; and
+readers are hardened against malformed data, so a buggy or hostile writer can't poison a
+clone. The spec ([SPEC.md](SPEC.md)) is at v0.1 — documents carry their version, unknown
+fields and event types round-trip, and semantic changes bump it.
 This repository dogfoods itself: its own review threads live on its `refs/threads/data`.
 
 ## Try it
 
 ```console
 $ cargo install --path crates/git-threads   # puts `git-threads` on PATH; git finds it as `git threads`
+                                            # (tagged releases also ship prebuilt binaries)
 
 $ git threads init                          # once per clone: fetch discussions too
 $ git threads comment src/parser.rs:120-128 \

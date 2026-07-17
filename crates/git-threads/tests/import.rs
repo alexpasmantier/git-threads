@@ -141,7 +141,7 @@ fn reimport_is_a_noop_and_new_replies_append() {
     let root = comment("C_1", "does b need a doc?", "2026-01-01T10:00:00Z", &head, None);
     let thread = line_thread(&head, vec![root.clone()]);
 
-    import::apply(&store, &base, &[thread.clone()]).unwrap();
+    import::apply(&store, &base, std::slice::from_ref(&thread)).unwrap();
     let tip = store.tip().unwrap();
 
     let again = import::apply(&store, &base, &[thread]).unwrap();

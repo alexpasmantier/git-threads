@@ -3,8 +3,13 @@ name = "git-threads-core"
 description = "Core format logic for git-threads: events, anchors, canonical serialization, state fold, re-anchoring"
 version.workspace = true
 edition.workspace = true
+# Lower than the CLI's: this crate is deliberately dependency-light so it
+# stays embeddable (the CLI's floor comes from gix).
+rust-version = "1.85"
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 serde.workspace = true
