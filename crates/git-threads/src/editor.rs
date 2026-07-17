@@ -28,27 +28,36 @@ pub fn message(repo: &gix::Repository, seed: &str, hint: &str) -> Result<String>
     }
     std::fs::write(&path, &contents)?;
 
-    // Same invocation shape git uses: the editor value is a shell fragment.
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$@\""))
-        .arg(&editor)
-        .arg(&path)
-        .status()
+    let status = spawn_editor(&editor, &path)
         .with_context(|| format!("failed to launch editor {editor:?}"))?;
     if !status.success() {
         bail!("editor {editor:?} exited with {status}");
     }
 
     let text = std::fs::read_to_string(&path)?;
-    let message =
-        text.lines().filter(|line| !line.starts_with('#')).collect::<Vec<_>>().join("\n");
+    let message = text.lines().filter(|line| !line.starts_with('#')).collect::<Vec<_>>().join("\n");
     let message = message.trim();
     if message.is_empty() {
         eprintln!("Aborting due to empty message.");
         std::process::exit(1);
     }
     Ok(message.to_string())
+}
+
+/// Run the editor on `path`. The editor value is a shell fragment (git's
+/// convention), so it goes through a shell: `sh` where there is one, `cmd`
+/// on Windows.
+#[cfg(unix)]
+fn spawn_editor(editor: &str, path: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
+    // Same invocation shape git uses.
+    Command::new("sh").arg("-c").arg(format!("{editor} \"$@\"")).arg(editor).arg(path).status()
+}
+
+#[cfg(windows)]
+fn spawn_editor(editor: &str, path: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
+    use std::os::windows::process::CommandExt;
+    // cmd re-parses the raw line itself; quote only the file argument.
+    Command::new("cmd").arg("/C").raw_arg(format!("{editor} \"{}\"", path.display())).status()
 }
 
 fn git_editor() -> Result<String> {

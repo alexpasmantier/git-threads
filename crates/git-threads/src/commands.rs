@@ -1624,6 +1624,9 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .arg("-C")
         .arg(dir)
         .args(args)
+        // Pin the message locale: `push` classifies rejections by matching
+        // git's error text, which localization would defeat.
+        .env("LC_ALL", "C")
         .output()
         .with_context(|| format!("failed to run git {args:?}"))?;
     if !output.status.success() {
