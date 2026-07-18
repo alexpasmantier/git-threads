@@ -382,6 +382,33 @@ overwrite. Rarely needed after `init`: a plain `git fetch` delivers the data and
 `git threads` command integrates it automatically — `pull` is for when you want the fetch
 *now*.
 
+### `git threads import`
+
+```
+git threads import github <number | url> [--remote <name>]      # default: origin
+git threads import github --all [--remote <name>]
+```
+
+Liberate your review history: a GitHub PR's review threads become ordinary threads in the
+repository — original authors (as their stable `noreply` identities), timestamps, reply
+chains, resolution state, and anchors rebuilt from the forge's position data, so old
+discussions re-anchor onto today's code like any other thread. `--all` walks every PR of
+the repository, one publish commit per PR. Fetching goes through the
+[`gh` CLI](https://cli.github.com) (its login is the only authentication needed); a URL may
+name any repository, not just the remote's.
+
+The mapping is deterministic — event bytes derive only from forge data and the git DAG —
+so two clones importing the same PR produce identical events and sync deduplicates them.
+Each imported event records its provenance in an `origin` field (forge, node ID, URL), and
+events whose origin is already present are skipped: re-importing is a no-op, and re-running
+after new replies arrived on GitHub imports just the new ones. Commits under discussion are
+fetched via `refs/pull/N/head` (which GitHub keeps after branch deletion) and pinned by the
+import commit, so the discussed code survives even the forge losing it. A thread whose code
+truly cannot be reconstructed is skipped with a warning, never half-imported.
+
+Review threads only, for now: PR-level conversation comments and review verdicts
+(approve / request changes) are not imported.
+
 ## Reading the data without the CLI
 
 Everything lives on `refs/threads/data` as ordinary git objects:

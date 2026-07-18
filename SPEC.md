@@ -241,8 +241,8 @@ Storage & scale
 
 Tooling
 
-- **CLI** — the single-player wedge. The reference implementation covers `comment|reply|edit|delete|resolve|move|discard|show|list|status|seen|pull|commit|push|init` (search via `list --grep`, machine output via `--json`); `export` and `import` remain.
-- **GitHub/GitLab importers** ("liberate your review history"), then bidirectional PR sync.
+- **CLI** — the single-player wedge. The reference implementation covers `comment|reply|edit|delete|resolve|move|discard|show|list|status|seen|pull|commit|push|init|import` (search via `list --grep`, machine output via `--json`, GitHub import per §8); `export` remains.
+- **GitLab importer** (the GitHub one ships in the reference CLI), then bidirectional PR sync.
 - **Static HTML export** of a discussion for repo-less readers.
 - **Desktop review client**: syntax highlighting, LSP navigation, search — the niceties web review UIs lack.
 - **Agent integration**: discuss changes with an agent whose commentary persists as threads; conventions for agent long-form output (attachments, soft body-size cap — agent verbosity is the assumption most likely to break the storage math).

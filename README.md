@@ -49,8 +49,9 @@ recomputed against whatever commit you're looking at.
 
 Experimental. The format and CLI cover the core loop — comment, reply, edit, delete, resolve,
 move, discard, show, list (with `--grep` search and `--json` output), status, a local inbox
-(`list --new`), and the git-shaped pull/commit/push cycle with drafts, session batching,
-and re-anchoring — but the spec is a draft and may still change.
+(`list --new`), the git-shaped pull/commit/push cycle with drafts, session batching,
+and re-anchoring, plus a GitHub importer that liberates PR review history into the
+repository — but the spec is a draft and may still change.
 This repository dogfoods itself: its own review threads live on its `refs/threads/data`.
 
 ## Try it
@@ -70,6 +71,8 @@ $ git threads show <thread-id>              # code context + conversation
 $ git threads status                        # drafts, unpushed events, new activity
 $ git threads commit                        # seal your drafts into local history
 $ git threads push                          # share; safe under concurrent pushes
+
+$ git threads import github 123             # a PR's review threads, or --all (needs gh)
 ```
 
 Optional: install man pages so `git threads --help` works (git routes it to `man git-threads`):

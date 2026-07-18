@@ -120,6 +120,11 @@ enum Command {
         #[arg(long, conflicts_with = "thread")]
         undo: bool,
     },
+    /// Import review discussions from a forge
+    Import {
+        #[command(subcommand)]
+        source: ImportSource,
+    },
     /// Fetch and integrate threads data from a remote
     Pull {
         /// Remote to pull from
@@ -187,6 +192,21 @@ enum Command {
         /// Directory to write the pages into
         #[arg(default_value = ".")]
         out: std::path::PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImportSource {
+    /// Import a pull request's review threads from GitHub (via the gh CLI)
+    Github {
+        /// PR number or full PR URL; omit with --all
+        pr: Option<String>,
+        /// Import every PR of the repository, open and closed
+        #[arg(long, conflicts_with = "pr")]
+        all: bool,
+        /// Remote naming the GitHub repository (and serving the commits)
+        #[arg(long, default_value = "origin")]
+        remote: String,
     },
 }
 
@@ -397,6 +417,36 @@ fn main() -> anyhow::Result<()> {
                     store.mark_all_seen()?;
                     println!("marked all threads seen");
                 }
+            }
+            Ok(())
+        }
+        Command::Import { source } => {
+            let ImportSource::Github { pr, all, remote } = source;
+            if pr.is_none() && !all {
+                anyhow::bail!("pass a PR number or URL, or --all");
+            }
+            let report = git_threads::import::github(&store, &remote, pr.as_deref(), all)?;
+            if report.events == 0 {
+                match report.known {
+                    0 => println!("nothing to import"),
+                    n => println!("everything already imported ({n} event{})", if n == 1 { "" } else { "s" }),
+                }
+            } else {
+                println!(
+                    "imported {} event{} in {} thread{} {}",
+                    report.events,
+                    if report.events == 1 { "" } else { "s" },
+                    report.threads,
+                    if report.threads == 1 { "" } else { "s" },
+                    ui.dim("(git threads push to share, seen to clear the inbox)")
+                );
+            }
+            if report.skipped > 0 {
+                println!(
+                    "{} thread{} skipped (code no longer reconstructable)",
+                    report.skipped,
+                    if report.skipped == 1 { "" } else { "s" }
+                );
             }
             Ok(())
         }
