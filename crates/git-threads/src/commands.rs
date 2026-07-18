@@ -1,11 +1,13 @@
 use crate::reanchor::{self, Reanchor};
-use crate::store::{Append, Batch, Integration, NewThread, Store, ThreadRecord};
-use crate::ui::{self, Ui};
+use crate::store::{Append, Batch, Integration, NewThread, PromotedDrafts, Store, ThreadRecord};
+use crate::ui::short;
+use crate::view::{
+    AnchorContext, DraftedEvent, MessageView, RemoteStatus, StatusView, ThreadDrafts, ThreadView,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
     Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, FoldedEvent, FoldedThread,
-    GitOid, LineRange, ReanchorStatus, Side, SnippetTarget, ThreadId, Timestamp, derive_snippet,
-    fold_thread,
+    GitOid, LineRange, Side, ThreadId, Timestamp, fold_thread,
 };
 use gix::ObjectId;
 use std::collections::BTreeSet;
@@ -59,7 +61,7 @@ pub fn init(store: &Store, remote: &str) -> Result<()> {
         Ok(_) => {
             println!("fetched from {remote}");
             if let Some(tip) = store.tracking_tip(remote)? {
-                report_integration(store.integrate(tip)?, remote);
+                println!("{}", store.integrate(tip)?.describe(remote));
             }
         }
         Err(err) => eprintln!("warning: initial fetch from {remote} failed: {err:#}"),
@@ -127,15 +129,6 @@ pub fn deinit(store: &Store, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn report_integration(integration: Integration, remote: &str) {
-    match integration {
-        Integration::UpToDate => println!("already up to date"),
-        Integration::Initialized => println!("initialized from {remote}"),
-        Integration::FastForwarded => println!("fast-forwarded to {remote}"),
-        Integration::Merged => println!("merged threads from {remote}"),
-    }
-}
-
 /// Fold already-fetched threads data into the local ref: integrate every
 /// `refs/threads/remotes/*/data` tracking ref (SPEC.md §7.2 step 2, run
 /// opportunistically before every command). Purely local — after `init`,
@@ -185,12 +178,6 @@ pub fn comment(store: &Store, opts: &CommentOpts) -> Result<ThreadId> {
         new_threads: vec![NewThread { anchor, root, events: vec![] }],
         appends: vec![],
     })?;
-    let ui = Ui::auto();
-    println!(
-        "drafted thread {} {}",
-        ui.yellow(short(&thread_id)),
-        ui.dim("(commit and push to share)")
-    );
     Ok(thread_id)
 }
 
@@ -425,10 +412,27 @@ fn resolve_diff(repo: &gix::Repository, spec: &str) -> Result<(ObjectId, ObjectI
     }
 }
 
+/// A drafted event and the thread it lands in.
+#[derive(Clone, Debug)]
+pub struct Drafted {
+    pub thread: ThreadId,
+    pub event: EventId,
+}
+
+/// A drafted event acting on an earlier message: an edit's replacement, a
+/// delete's tombstone.
+#[derive(Clone, Debug)]
+pub struct Amendment {
+    /// The comment or reply acted on.
+    pub target: EventId,
+    /// The drafted edit or delete event.
+    pub event: EventId,
+}
+
 /// Reply to a thread, or to a specific message in one: the prefix may name
 /// the thread or any comment/reply in it, and `in_reply_to` records the
 /// named event (SPEC.md §2.1 allows replying to any event in the thread).
-pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
+pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<Drafted> {
     let (thread, target) = find_message(store, prefix)?;
     let event = new_event(store.repo(), EventKind::Reply, |e| {
         e.body = Some(wrap_message(message));
@@ -439,19 +443,13 @@ pub fn reply(store: &Store, prefix: &str, message: &str) -> Result<EventId> {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    let ui = Ui::auto();
-    println!(
-        "drafted reply {} to thread {}",
-        ui.yellow(short(&event_id)),
-        ui.yellow(short(&thread.id))
-    );
-    Ok(event_id)
+    Ok(Drafted { thread: thread.id, event: event_id })
 }
 
 /// Edit a comment or reply: append an `edit` event superseding the current
 /// tip of the target's edit chain (SPEC.md §2.1). Only the author's edits
 /// take effect in the fold, so anyone else's are rejected here.
-pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId> {
+pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<Amendment> {
     let (thread, target) = find_editable(store, event_prefix)?;
     let event = new_event(store.repo(), EventKind::Edit, |e| {
         e.body = Some(wrap_message(message));
@@ -462,13 +460,7 @@ pub fn edit(store: &Store, event_prefix: &str, message: &str) -> Result<EventId>
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    let ui = Ui::auto();
-    println!(
-        "drafted edit of {} {}",
-        ui.yellow(short(&target.id)),
-        ui.dim(format_args!("(edit event {})", short(&event_id)))
-    );
-    Ok(event_id)
+    Ok(Amendment { target: target.id, event: event_id })
 }
 
 /// The current text of a comment or reply, for seeding the editor when
@@ -499,7 +491,7 @@ fn find_editable(store: &Store, event_prefix: &str) -> Result<(ThreadRecord, Fol
 
 /// Retract a comment or reply with a `delete` tombstone (SPEC.md §2.1). The
 /// content stays in history; the fold marks the event retracted.
-pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
+pub fn delete(store: &Store, event_prefix: &str) -> Result<Amendment> {
     let (thread, target) = find_message(store, event_prefix)?;
     let me = identity(store.repo())?;
     if target.event.author.email != me.email {
@@ -521,8 +513,7 @@ pub fn delete(store: &Store, event_prefix: &str) -> Result<EventId> {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    println!("drafted retraction of {}", Ui::auto().yellow(short(&target.id)));
-    Ok(event_id)
+    Ok(Amendment { target: target.id, event: event_id })
 }
 
 /// The anchor re-anchoring starts from (SPEC.md §2.4 rule 5): the latest
@@ -535,7 +526,7 @@ fn effective_anchor<'a>(thread: &'a ThreadRecord, folded: &'a FoldedThread) -> &
 /// Re-pin a thread to where its code lives now: an empty-diff anchor on
 /// `at`, recorded as a `move` event (SPEC.md §2.1). The escape hatch for
 /// outdated threads — when re-anchoring can't follow the code, a person can.
-pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Result<EventId> {
+pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Result<MoveDraft> {
     let (thread, _) = find_message(store, prefix)?;
     let repo = store.repo();
     let target = resolve_commit(repo, at)?;
@@ -572,23 +563,21 @@ pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Re
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    let ui = Ui::auto();
-    let location = match lines {
-        Some(l) => format!("{path}:{}-{}", l.start, l.end),
-        None => path.to_string(),
-    };
-    println!(
-        "drafted move of thread {} to {} {}",
-        ui.yellow(short(&thread.id)),
-        ui.bold(location),
-        ui.dim("(commit and push to share)")
-    );
-    Ok(event_id)
+    Ok(MoveDraft { thread: thread.id, event: event_id, path: path.to_string(), lines })
+}
+
+/// A drafted move: the thread re-pinned and where to.
+#[derive(Clone, Debug)]
+pub struct MoveDraft {
+    pub thread: ThreadId,
+    pub event: EventId,
+    pub path: String,
+    pub lines: Option<LineRange>,
 }
 
 /// Mark a thread resolved (or reopen it). The prefix may name the thread or
 /// any comment/reply in it.
-pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
+pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<ThreadId> {
     let (thread, _) = find_message(store, prefix)?;
     let event = new_event(store.repo(), EventKind::Resolve, |e| {
         e.resolved = Some(resolved);
@@ -597,14 +586,7 @@ pub fn resolve(store: &Store, prefix: &str, resolved: bool) -> Result<()> {
         new_threads: vec![],
         appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
     })?;
-    let ui = Ui::auto();
-    println!(
-        "thread {} {} {}",
-        ui.yellow(short(&thread.id)),
-        if resolved { "resolved" } else { "reopened" },
-        ui.dim("(draft)")
-    );
-    Ok(())
+    Ok(thread.id)
 }
 
 pub struct ListOpts {
@@ -616,11 +598,6 @@ pub struct ListOpts {
     pub at: String,
     /// Keep only this resolution state.
     pub resolved: Option<bool>,
-    pub oneline: bool,
-    pub patch: bool,
-    pub stat: bool,
-    /// Machine-readable output: one JSON array of thread objects.
-    pub json: bool,
     /// Only threads with events you haven't seen.
     pub new: bool,
     /// git log's -n: stop after this many threads.
@@ -634,11 +611,11 @@ pub struct ListOpts {
     pub until: Option<String>,
 }
 
-/// List threads in the current snapshot with their folded state and their
-/// re-anchor status against `at` (SPEC.md §4.2). `target`/`file` narrow to
-/// one change and one path (grammar mirrors `comment`, except a lone file
+/// List threads in the current snapshot as [`ThreadView`]s, newest first,
+/// re-anchored against `at` (SPEC.md §4.2). `target`/`file` narrow to one
+/// change and one path (grammar mirrors `comment`, except a lone file
 /// filters across all changes).
-pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
+pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
     let repo = store.repo();
     let mut threads = store.threads()?;
     let (target, file) = match (opts.target.as_deref(), opts.file.as_deref()) {
@@ -669,19 +646,9 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
     let until = opts.until.as_deref().map(parse_date).transpose()?;
     // Newest first, by earliest event timestamp.
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
-    // list -p stays bounded (clipped hunks, diffstat for whole changes):
-    // across many threads a full patch each buries the list. show -p is the
-    // full-patch deep dive on one thread.
-    let snippet_mode = match (opts.patch, opts.stat) {
-        (_, true) => Some(SnippetMode::Stat),
-        (true, _) => Some(SnippetMode::Auto),
-        _ => None,
-    };
     let seen = store.seen_event_ids()?;
     let me = identity(repo).ok();
-    let ui = Ui::auto();
-    let mut shown = 0;
-    let mut json_threads: Vec<serde_json::Value> = Vec::new();
+    let mut views: Vec<ThreadView> = Vec::new();
     for thread in threads {
         let unseen = unseen_ids(&thread, &seen, me.as_ref());
         if opts.new && unseen.is_empty() {
@@ -727,117 +694,12 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<()> {
                 continue;
             }
         }
-        if opts.max_count.is_some_and(|n| shown >= n) {
+        if opts.max_count.is_some_and(|n| views.len() >= n) {
             break;
         }
-        let effective = effective_anchor(&thread, &folded);
-        let placement = reanchor::reanchor(store, effective, at_commit)?;
-        if opts.json {
-            json_threads.push(thread_json(&thread, &folded, at_commit, &placement, &unseen)?);
-            shown += 1;
-            continue;
-        }
-        let mut deco =
-            vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
-        if folded.moved.is_some() {
-            deco.push(ui.yellow("moved"));
-        }
-        if folded.events.len() > 1 {
-            deco.push(ui.dim(format_args!("{} messages", folded.events.len())));
-        }
-        if !thread.drafts.is_empty() {
-            let n = thread.drafts.len();
-            deco.push(ui.yellow(format_args!("{n} draft{}", if n == 1 { "" } else { "s" })));
-        }
-        if !unseen.is_empty() {
-            deco.push(ui.cyan(format_args!("{} new", unseen.len())));
-        }
-        let decoration = decorate(ui, &deco);
-        let location = match (&thread.anchor.path, &thread.anchor.lines) {
-            (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
-            (Some(path), None) => path.clone(),
-            _ if opts.oneline => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
-            _ => "whole change".to_string(),
-        };
-        // One location for the scanning eye: where the thread is at --at.
-        // Approximate placements carry their status; when nothing matches,
-        // the original anchor stands, marked outdated. The full original vs
-        // current story is show's job.
-        let (place, on_diff, note) = match &placement {
-            Reanchor::WholeCommit => (location.clone(), true, String::new()),
-            Reanchor::Located { path, lines, status } => {
-                let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-                let note = match status {
-                    ReanchorStatus::Exact => String::new(),
-                    status => format!(" {}", ui.yellow(format_args!("({status})"))),
-                };
-                (format!("{path}{lines}"), false, note)
-            }
-            Reanchor::Outdated => {
-                (location.clone(), true, format!(" {}", ui.red("(outdated)")))
-            }
-        };
-        // Only lines that couldn't be re-located need their diff spelled out.
-        let diff = if on_diff {
-            format!(
-                " {}",
-                ui.dim(format_args!(
-                    "of {}..{}",
-                    &thread.anchor.diff.base.as_str()[..12],
-                    &thread.anchor.diff.head.as_str()[..12]
-                ))
-            )
-        } else {
-            String::new()
-        };
-        if opts.oneline {
-            let title = root
-                .and_then(|r| r.effective_body.as_deref())
-                .unwrap_or("")
-                .lines()
-                .next()
-                .unwrap_or("");
-            println!("{} {decoration} {place}{note}  {title}", ui.yellow(short(&thread.id)));
-            if let Some(mode) = snippet_mode {
-                print!("{}", anchor_snippet(ui, store, effective, &placement, at_commit, mode)?);
-            }
-        } else {
-            if shown > 0 {
-                println!();
-            }
-            println!("{} {decoration}", ui.yellow(format_args!("thread {}", thread.id)));
-            if let Some(root) = root {
-                println!(
-                    "Author: {} {}",
-                    ui.bold(&root.event.author.name),
-                    ui.dim(format_args!("<{}>", root.event.author.email))
-                );
-                println!("Date:   {}", ui::date(&root.event.ts));
-            }
-            println!("Anchor: {}{diff}{note}", ui.bold(&place));
-            let body = match root {
-                Some(root) if root.retracted => ui.dim("[retracted]"),
-                Some(root) => root.effective_body.clone().unwrap_or_default(),
-                None => String::new(),
-            };
-            if !body.is_empty() {
-                println!();
-                for line in body.lines() {
-                    println!("    {line}");
-                }
-            }
-            if let Some(mode) = snippet_mode {
-                print!("{}", anchor_snippet(ui, store, effective, &placement, at_commit, mode)?);
-            }
-        }
-        shown += 1;
+        views.push(build_view(store, &thread, &folded, at_commit, &seen, me.as_ref())?);
     }
-    if opts.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(json_threads))?);
-    } else if shown == 0 {
-        println!("{}", ui.dim("no threads"));
-    }
-    Ok(())
+    Ok(views)
 }
 
 /// A thread's published events the user hasn't looked at: absent from the
@@ -860,74 +722,77 @@ fn unseen_ids(
         .collect()
 }
 
-/// One thread as `--json` emits it: the folded state plus the re-anchor
-/// placement against `at`. The `anchor` field is the anchor.json document
-/// (SPEC.md §3) verbatim; `body` is the current (folded) text, null when
-/// retracted.
-fn thread_json(
+/// Assemble a [`ThreadView`] from a thread's record and folded state: the
+/// re-anchor placement against `at`, and every message with its folded body
+/// and draft/new flags applied.
+fn build_view(
+    store: &Store,
     thread: &ThreadRecord,
     folded: &FoldedThread,
     at: ObjectId,
-    placement: &Reanchor,
-    unseen: &BTreeSet<EventId>,
-) -> Result<serde_json::Value> {
-    use serde_json::json;
-    let placement = match placement {
-        Reanchor::WholeCommit => json!({ "kind": "whole-commit" }),
-        Reanchor::Outdated => json!({ "kind": "outdated" }),
-        Reanchor::Located { path, lines, status } => {
-            let (status, fuzz) = match status {
-                ReanchorStatus::Exact => ("exact", None),
-                ReanchorStatus::Relocated => ("relocated", None),
-                ReanchorStatus::Fuzzy(f) => ("fuzzy", Some(*f)),
-            };
-            let mut value = json!({ "kind": "located", "path": path, "status": status });
-            if let Some(lines) = lines {
-                value["lines"] = json!({ "start": lines.start, "end": lines.end });
-            }
-            if let Some(fuzz) = fuzz {
-                value["fuzz"] = json!(fuzz);
-            }
-            value
-        }
+    seen: &BTreeSet<EventId>,
+    me: Option<&Author>,
+) -> Result<ThreadView> {
+    let unseen = unseen_ids(thread, seen, me);
+    let placement = reanchor::reanchor(store, effective_anchor(thread, folded), at)?;
+    let (moved_to, moved_by) = match &folded.moved {
+        Some((_, event)) => (event.anchor.clone(), Some(event.author.clone())),
+        None => (None, None),
     };
-    let messages: Vec<serde_json::Value> = folded
+    let messages = folded
         .events
         .iter()
-        .map(|e| {
-            json!({
-                "id": e.id.as_str(),
-                "type": String::from(e.event.kind.clone()),
-                "author": { "name": e.event.author.name, "email": e.event.author.email },
-                "ts": e.event.ts.as_str(),
-                "body": if e.retracted { None } else { e.effective_body.as_deref() },
-                "in_reply_to": e.event.in_reply_to.as_ref().map(|id| id.as_str()),
-                "edited": e.edited,
-                "retracted": e.retracted,
-                "draft": thread.drafts.contains(&e.id),
-                "new": unseen.contains(&e.id),
-            })
+        .map(|e| MessageView {
+            id: e.id.clone(),
+            kind: e.event.kind.clone(),
+            author: e.event.author.clone(),
+            ts: e.event.ts.clone(),
+            body: if e.retracted { None } else { e.effective_body.clone() },
+            in_reply_to: e.event.in_reply_to.clone(),
+            edited: e.edited,
+            retracted: e.retracted,
+            draft: thread.drafts.contains(&e.id),
+            new: unseen.contains(&e.id),
         })
         .collect();
-    let moved_to = match folded.moved.as_ref().and_then(|(_, e)| e.anchor.as_ref()) {
-        Some(anchor) => serde_json::to_value(anchor)?,
-        None => serde_json::Value::Null,
-    };
-    Ok(json!({
-        "id": thread.id.as_str(),
-        "resolved": folded.resolved,
-        "anchor": serde_json::to_value(&thread.anchor)?,
-        "moved_to": moved_to,
-        "at": at.to_string(),
-        "placement": placement,
-        "messages": messages,
-    }))
+    Ok(ThreadView {
+        id: thread.id.clone(),
+        resolved: folded.resolved,
+        anchor: thread.anchor.clone(),
+        moved_to,
+        moved_by,
+        at: GitOid::from_hex(at.to_string())?,
+        placement,
+        messages,
+    })
 }
 
-/// A git-log-style decoration list — `(open, 2 messages, 1 draft)` — with
-/// dim punctuation around already-colored parts.
-fn decorate(ui: Ui, parts: &[String]) -> String {
-    format!("{}{}{}", ui.dim("("), parts.join(&ui.dim(", ")), ui.dim(")"))
+/// One thread as a [`ThreadView`], re-anchored against `at`. The prefix may
+/// name the thread or any comment/reply in it.
+pub fn thread_view(store: &Store, prefix: &str, at: &str) -> Result<ThreadView> {
+    let (thread, _) = find_message(store, prefix)?;
+    let folded = fold_thread(thread.events.clone());
+    let at = resolve_commit(store.repo(), at)?;
+    let seen = store.seen_event_ids()?;
+    let me = identity(store.repo()).ok();
+    build_view(store, &thread, &folded, at, &seen, me.as_ref())
+}
+
+/// The thread a prefix names: the thread ID, or the ID of any comment or
+/// reply in it.
+pub fn resolve_thread(store: &Store, prefix: &str) -> Result<ThreadId> {
+    Ok(find_message(store, prefix)?.0.id)
+}
+
+/// How many threads have messages the user hasn't seen.
+pub fn threads_with_news(store: &Store) -> Result<usize> {
+    let seen = store.seen_event_ids()?;
+    let me = identity(store.repo()).ok();
+    Ok(news_count(&store.threads()?, &seen, me.as_ref()))
+}
+
+fn news_count(threads: &[ThreadRecord], seen: &BTreeSet<EventId>, me: Option<&Author>) -> usize {
+    threads.iter().filter(|t| !unseen_ids(t, seen, me).is_empty()).count()
 }
 
 /// Parse a --since/--until boundary, covering the shapes git dates are
@@ -982,20 +847,19 @@ pub enum SnippetMode {
 }
 
 /// The context a thread is about. Comments target diffs, so this is the
-/// anchored change itself, rendered as git renders diffs. When there is no
-/// change to show — snapshot annotations (an empty diff), or anchors whose
-/// lines predate the diff-intersection rule — the file stands in: at the
+/// anchored change itself, as git reports it. When there is no change to
+/// show — snapshot annotations (an empty diff), or anchors whose lines
+/// predate the diff-intersection rule — the file stands in: at the
 /// placement's location when the code was found on the target commit (the
-/// snippet then agrees with the `Current:`/`Anchor:` line above it), the
-/// original blob only when it wasn't.
-fn anchor_snippet(
-    ui: Ui,
+/// excerpt then agrees with the `Current:`/`Anchor:` line above it), the
+/// original blob only when it wasn't. `None` when there is nothing to show.
+pub fn anchor_context(
     store: &Store,
-    anchor: &Anchor,
-    placement: &Reanchor,
-    target: ObjectId,
+    view: &ThreadView,
     mode: SnippetMode,
-) -> Result<String> {
+) -> Result<Option<AnchorContext>> {
+    let anchor = view.effective_anchor();
+    let target = ObjectId::from_hex(view.at.as_str().as_bytes())?;
     if anchor.diff.base != anchor.diff.head {
         let (base, head) = (anchor.diff.base.as_str(), anchor.diff.head.as_str());
         let stat = mode == SnippetMode::Stat
@@ -1004,135 +868,55 @@ fn anchor_snippet(
         if let Some(path) = &anchor.path {
             args.extend(["--", path]);
         }
-        let out = git(store.repo().git_dir(), &args)?;
-        let rendered = if stat {
-            render_stat(ui, &out)
+        let text = git(store.repo().git_dir(), &args)?;
+        if stat {
+            if !text.is_empty() {
+                return Ok(Some(AnchorContext::Stat(text)));
+            }
         } else {
             let side = anchor.side.unwrap_or(Side::New);
             let clip = mode != SnippetMode::Patch;
-            render_diff(ui, &out, side, anchor.lines, anchor.path.is_none(), clip)
-        };
-        if !rendered.is_empty() {
-            return Ok(rendered);
+            let headers = anchor.path.is_none();
+            // Only a diff the renderer would show something of counts —
+            // same hunk-overlap rule the renderer clips by. An empty one
+            // falls through to the file excerpt.
+            let spans = hunk_spans(&text, side);
+            let overlaps = |&(start, len): &(u32, u32)| {
+                anchor.lines.is_none_or(|want| {
+                    let end = start + len.max(1) - 1;
+                    want.start <= end && want.end >= start
+                })
+            };
+            let usable = if headers {
+                !text.is_empty()
+            } else if clip {
+                spans.iter().any(overlaps)
+            } else {
+                !spans.is_empty()
+            };
+            if usable {
+                return Ok(Some(AnchorContext::Diff {
+                    text,
+                    side,
+                    lines: anchor.lines,
+                    headers,
+                    clip,
+                }));
+            }
         }
     }
-    if let Reanchor::Located { path, lines: Some(lines), .. } = placement
+    if let Reanchor::Located { path, lines: Some(lines), .. } = &view.placement
         && let Some(blob_id) = reanchor::blob_at(store.repo(), target, path)?
     {
-        return Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, *lines));
+        let content = reanchor::blob_content(store.repo(), blob_id)?;
+        return Ok(Some(AnchorContext::Excerpt { content, lines: *lines }));
     }
     if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
         let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;
-        return Ok(render_snippet(ui, &reanchor::blob_content(store.repo(), blob_id)?, lines));
+        let content = reanchor::blob_content(store.repo(), blob_id)?;
+        return Ok(Some(AnchorContext::Excerpt { content, lines }));
     }
-    Ok(String::new())
-}
-
-/// Render `git diff --stat` output the way git log --stat does: insertion
-/// marks green, deletion marks red.
-fn render_stat(ui: Ui, stat: &str) -> String {
-    use std::fmt::Write;
-    if stat.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from("\n");
-    for line in stat.lines() {
-        match line.rsplit_once('|') {
-            Some((left, graph)) => {
-                let graph =
-                    graph.replace('+', &ui.green("+")).replace('-', &ui.red("-"));
-                writeln!(out, " {left}|{graph}").unwrap();
-            }
-            None => writeln!(out, " {line}").unwrap(),
-        }
-    }
-    out
-}
-
-/// Render a unified diff the way git colors it, marking the anchored
-/// `lines` on `side` in the gutter. With `clip`, only hunks overlapping the
-/// anchored lines are kept (all of them when `lines` is `None`). File
-/// headers are shown only for whole-change diffs (`headers`), where they
-/// separate files.
-fn render_diff(
-    ui: Ui,
-    diff: &str,
-    side: Side,
-    lines: Option<LineRange>,
-    headers: bool,
-    clip: bool,
-) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let (mut old_no, mut new_no) = (0u32, 0u32);
-    let mut in_hunk = false;
-    let mut wanted = false;
-    for line in diff.lines() {
-        if line.starts_with("@@") {
-            in_hunk = true;
-            let mut fields = line.split_whitespace().skip(1);
-            let span = |token: Option<&str>, sign: char| -> (u32, u32) {
-                let Some(token) = token.and_then(|t| t.strip_prefix(sign)) else { return (0, 0) };
-                match token.split_once(',') {
-                    Some((start, len)) => {
-                        (start.parse().unwrap_or(0), len.parse().unwrap_or(0))
-                    }
-                    None => (token.parse().unwrap_or(0), 1),
-                }
-            };
-            let old = span(fields.next(), '-');
-            let new = span(fields.next(), '+');
-            (old_no, new_no) = (old.0, new.0);
-            let (start, len) = match side {
-                Side::Old => old,
-                Side::New => new,
-            };
-            wanted = !clip
-                || lines.is_none_or(|want| {
-                    let end = start + len.max(1) - 1;
-                    want.start <= end && want.end >= start
-                });
-            if wanted {
-                writeln!(out, "  {}", ui.cyan(line)).unwrap();
-            }
-            continue;
-        }
-        if !in_hunk || !line.starts_with(['+', '-', ' ', '\\']) {
-            in_hunk = false;
-            if headers {
-                writeln!(out, "  {}", ui.bold(line)).unwrap();
-            }
-            continue;
-        }
-        let on = |no: u32| lines.is_some_and(|l| l.start <= no && no <= l.end);
-        let (marked, rendered) = match line.as_bytes()[0] {
-            b'-' => {
-                let marked = side == Side::Old && on(old_no);
-                old_no += 1;
-                (marked, ui.red(line))
-            }
-            b'+' => {
-                let marked = side == Side::New && on(new_no);
-                new_no += 1;
-                (marked, ui.green(line))
-            }
-            b' ' => {
-                let marked = on(match side {
-                    Side::Old => old_no,
-                    Side::New => new_no,
-                });
-                old_no += 1;
-                new_no += 1;
-                (marked, ui.dim(line))
-            }
-            _ => (false, ui.dim(line)), // "\ No newline at end of file"
-        };
-        if wanted {
-            let mark = if marked { ui.cyan(">") } else { " ".to_string() };
-            writeln!(out, "{mark} {rendered}").unwrap();
-        }
-    }
-    if out.is_empty() { out } else { format!("\n{out}") }
+    Ok(None)
 }
 
 /// Sort out `list`'s lone positional: a change (commit or range) or a path
@@ -1195,224 +979,9 @@ fn range_commits(
     Ok(out.lines().map(str::to_string).collect())
 }
 
-/// Render a thread: anchor location, re-anchor placement on `at` (SPEC.md
-/// §4.2), code context, and the folded conversation. The context comes from
-/// the re-anchored location when there is one, from the anchor's own diff
-/// when outdated (§4.2 step 4). The prefix may name the thread or any
-/// comment/reply in it.
-pub fn show(store: &Store, prefix: &str, at: &str, mode: SnippetMode) -> Result<()> {
-    let (thread, _) = find_message(store, prefix)?;
-    print!("{}", render_thread(Ui::auto(), store, &thread, at, mode)?);
-    // Reading a thread is what "seen" means; from here on it's not news.
-    store.mark_thread_seen(&thread.id)?;
-    Ok(())
-}
-
-/// `show --json`: the same thread object `list --json` emits. Unlike `show`,
-/// this does NOT mark the thread seen — a polling tool must not clear the
-/// user's inbox.
-pub fn show_json(store: &Store, prefix: &str, at: &str) -> Result<()> {
-    let (thread, _) = find_message(store, prefix)?;
-    let folded = fold_thread(thread.events.clone());
-    let at_commit = resolve_commit(store.repo(), at)?;
-    let placement = reanchor::reanchor(store, effective_anchor(&thread, &folded), at_commit)?;
-    let unseen = unseen_ids(&thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&thread_json(&thread, &folded, at_commit, &placement, &unseen)?)?
-    );
-    Ok(())
-}
-
-/// Mark one thread — or everything — seen without opening it. `undo`
-/// rewinds the latest mark instead (marks chain, so this is one step back).
-pub fn seen(store: &Store, prefix: Option<&str>, undo: bool) -> Result<()> {
-    if undo {
-        if !store.undo_seen()? {
-            println!("nothing to undo (no seen mark)");
-            return Ok(());
-        }
-        let seen = store.seen_event_ids()?;
-        let me = identity(store.repo()).ok();
-        let with_news = store
-            .threads()?
-            .iter()
-            .filter(|t| !unseen_ids(t, &seen, me.as_ref()).is_empty())
-            .count();
-        println!(
-            "rewound the seen mark; {with_news} thread{} with new activity",
-            if with_news == 1 { "" } else { "s" }
-        );
-        return Ok(());
-    }
-    match prefix {
-        Some(prefix) => {
-            let (thread, _) = find_message(store, prefix)?;
-            store.mark_thread_seen(&thread.id)?;
-            println!("marked thread {} seen", Ui::auto().yellow(short(&thread.id)));
-        }
-        None => {
-            store.mark_all_seen()?;
-            println!("marked all threads seen");
-        }
-    }
-    Ok(())
-}
-
-/// The full thread as `show` prints it: header, re-anchor placement, code
-/// context, conversation.
-fn render_thread(
-    ui: Ui,
-    store: &Store,
-    thread: &ThreadRecord,
-    at: &str,
-    mode: SnippetMode,
-) -> Result<String> {
-    use std::fmt::Write;
-    let folded = fold_thread(thread.events.clone());
-    let anchor = &thread.anchor;
-    let effective = effective_anchor(thread, &folded);
-    let mut out = String::new();
-
-    let target = resolve_commit(store.repo(), at)?;
-    let target_short = &target.to_string()[..12];
-    let placement = reanchor::reanchor(store, effective, target)?;
-
-    // Placement (outdated, drift) lives in the field lines below; the
-    // decorations carry thread state only.
-    let mut deco = vec![if folded.resolved { ui.magenta("resolved") } else { ui.green("open") }];
-    if folded.moved.is_some() {
-        deco.push(ui.yellow("moved"));
-    }
-    writeln!(
-        out,
-        "{} {}",
-        ui.yellow(format_args!("thread {}", thread.id)),
-        decorate(ui, &deco)
-    )
-    .unwrap();
-    let side = match anchor.side {
-        Some(Side::Old) => ui.dim(" (old side)"),
-        _ => String::new(),
-    };
-    let location = match (&anchor.path, &anchor.lines) {
-        (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
-        (Some(path), None) => path.clone(),
-        _ => "whole change".to_string(),
-    };
-    // The full story, one line per chapter: what the author anchored to,
-    // where a human re-pinned it (if anyone did), and where the code sits at
-    // --at. Unlike list's single current-first line, nothing is suppressed —
-    // an explicit exact `Current:` is the confirmation it's still there.
-    writeln!(
-        out,
-        "Original: {}{side} {}",
-        ui.bold(location),
-        ui.dim(format_args!(
-            "of {}..{}",
-            &anchor.diff.base.as_str()[..12],
-            &anchor.diff.head.as_str()[..12]
-        ))
-    )
-    .unwrap();
-
-    if let Some((_, move_event)) = &folded.moved {
-        let location = match (&effective.path, &effective.lines) {
-            (Some(path), Some(lines)) => format!("{path}:{}-{}", lines.start, lines.end),
-            (Some(path), None) => path.clone(),
-            _ => "whole change".to_string(),
-        };
-        writeln!(
-            out,
-            "Moved:    {} {}",
-            ui.bold(location),
-            ui.dim(format_args!(
-                "at {} by {}",
-                &effective.diff.head.as_str()[..12],
-                move_event.author.name
-            ))
-        )
-        .unwrap();
-    }
-
-    match &placement {
-        Reanchor::WholeCommit => {}
-        Reanchor::Located { path, lines, status } => {
-            let exact = matches!(status, ReanchorStatus::Exact);
-            let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-            let status = format!("({status})");
-            let status = if exact { ui.green(status) } else { ui.yellow(status) };
-            writeln!(
-                out,
-                "Current:  {} at {target_short} {status}",
-                ui.bold(format_args!("{path}{lines}"))
-            )
-            .unwrap();
-        }
-        Reanchor::Outdated => {
-            writeln!(out, "Current:  {} at {target_short}", ui.red("no match")).unwrap();
-        }
-    }
-
-    let unseen = unseen_ids(thread, &store.seen_event_ids()?, identity(store.repo()).ok().as_ref());
-    out.push_str(&anchor_snippet(ui, store, effective, &placement, target, mode)?);
-    out.push_str(&render_conversation(ui, thread, &folded, &unseen));
-    Ok(out)
-}
-
-/// The conversation as `show` prints it: one block per message, blank-line
-/// separated, starting with a blank line.
-fn render_conversation(
-    ui: Ui,
-    thread: &ThreadRecord,
-    folded: &FoldedThread,
-    unseen: &BTreeSet<EventId>,
-) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    for event in &folded.events {
-        let kind = if event.event.kind == EventKind::Reply { "reply" } else { "comment" };
-        let edited = if event.edited { format!(" {}", ui.dim("(edited)")) } else { String::new() };
-        let draft = if thread.drafts.contains(&event.id) {
-            format!(" {}", ui.yellow("(draft)"))
-        } else if unseen.contains(&event.id) {
-            format!(" {}", ui.cyan("(new)"))
-        } else {
-            String::new()
-        };
-        writeln!(
-            out,
-            "\n{}  {} {}  {}{edited}{draft}",
-            ui.yellow(format_args!("{kind:<7} {}", short(&event.id))),
-            ui.bold(&event.event.author.name),
-            ui.dim(format_args!("<{}>", event.event.author.email)),
-            ui.dim(ui::date(&event.event.ts)),
-        )
-        .unwrap();
-        if event.retracted {
-            writeln!(out, "    {}", ui.dim("[retracted]")).unwrap();
-        } else if let Some(body) = &event.effective_body {
-            for line in body.lines() {
-                writeln!(out, "    {line}").unwrap();
-            }
-        }
-    }
-    out
-}
-
-/// The full thread as `show` renders it, uncolored, for the editor hint
-/// when `reply` runs without --message.
-pub fn thread_preview(store: &Store, prefix: &str) -> Result<String> {
-    let (thread, _) = find_message(store, prefix)?;
-    Ok(format!(
-        "replying to:\n\n{}",
-        render_thread(Ui::plain(), store, &thread, "HEAD", SnippetMode::Auto)?
-    ))
-}
-
 /// Discard one drafted event before publishing. Discarding a drafted
 /// thread's root discards the whole draft thread.
-pub fn discard(store: &Store, prefix: &str) -> Result<()> {
+pub fn discard(store: &Store, prefix: &str) -> Result<Discarded> {
     let mut matches: Vec<(ThreadId, EventId)> = Vec::new();
     for thread in store.threads()? {
         for event_id in &thread.drafts {
@@ -1430,127 +999,53 @@ pub fn discard(store: &Store, prefix: &str) -> Result<()> {
         ),
     };
     let removed = store.discard_draft(&thread_id, &event_id)?;
-    let ui = Ui::auto();
-    if removed > 1 || event_id == thread_id {
-        println!(
-            "discarded draft thread {} {}",
-            ui.yellow(short(&thread_id)),
-            ui.dim(format_args!("({removed} event{})", if removed == 1 { "" } else { "s" })),
-        );
+    Ok(if removed > 1 || event_id == thread_id {
+        Discarded::Thread { thread: thread_id, events: removed }
     } else {
-        println!("discarded draft {}", ui.yellow(short(&event_id)));
-    }
-    Ok(())
+        Discarded::Event(event_id)
+    })
 }
 
-/// Discard every unpublished draft.
-pub fn discard_all(store: &Store) -> Result<()> {
-    let removed = store.discard_all_drafts()?;
-    match removed {
-        0 => println!("no drafts"),
-        n => println!("discarded {n} draft{}", if n == 1 { "" } else { "s" }),
-    }
-    Ok(())
+/// What `discard` dropped.
+#[derive(Clone, Debug)]
+pub enum Discarded {
+    /// The whole draft thread went with its discarded root.
+    Thread { thread: ThreadId, events: usize },
+    Event(EventId),
 }
 
-/// A marked, line-numbered snippet of `lines` out of `content`, preceded by
-/// a blank line. Context lines are dimmed so the target lines carry the eye.
-fn render_snippet(ui: Ui, content: &str, lines: LineRange) -> String {
-    use std::fmt::Write;
-    let Some(snippet) = derive_snippet(content, lines) else {
-        return String::new();
-    };
-    let mut out = String::from("\n");
-    let push_line = |out: &mut String, line_no: &mut u32, line: &str, marked: bool| {
-        let gutter = ui.dim(format_args!("{line_no:>5} │"));
-        if marked {
-            writeln!(out, "{} {gutter} {line}", ui.cyan(">")).unwrap();
-        } else {
-            writeln!(out, "  {gutter} {}", ui.dim(line)).unwrap();
-        }
-        *line_no += 1;
-    };
-    let mut line_no = snippet.first_line;
-    for line in &snippet.before {
-        push_line(&mut out, &mut line_no, line, false);
-    }
-    match &snippet.target {
-        SnippetTarget::Full(lines) => {
-            for line in lines {
-                push_line(&mut out, &mut line_no, line, true);
-            }
-        }
-        SnippetTarget::Truncated { head, tail, omitted, .. } => {
-            for line in head {
-                push_line(&mut out, &mut line_no, line, true);
-            }
-            writeln!(out, "        {}", ui.dim(format_args!("⋮ {omitted} lines omitted"))).unwrap();
-            line_no += *omitted as u32;
-            for line in tail {
-                push_line(&mut out, &mut line_no, line, true);
-            }
-        }
-    }
-    for line in &snippet.after {
-        push_line(&mut out, &mut line_no, line, false);
-    }
-    out
+/// Discard every unpublished draft. Returns how many events were dropped.
+pub fn discard_all(store: &Store) -> Result<usize> {
+    store.discard_all_drafts()
 }
 
 /// The threads counterpart of `git status`: what's drafted (awaiting
 /// `commit`) and what's sealed locally but not yet on each remote (awaiting
 /// `push`). Unpushed counts compare snapshots, not commit graphs — content
 /// addressing makes event sets directly comparable across refs.
-pub fn status(store: &Store) -> Result<()> {
-    let ui = Ui::auto();
+pub fn status(store: &Store) -> Result<StatusView> {
     let threads = store.threads()?;
 
-    let mut lines: Vec<String> = Vec::new();
-    let mut draft_threads = 0usize;
+    let mut drafted: Vec<ThreadDrafts> = Vec::new();
     for thread in &threads {
         if thread.drafts.is_empty() {
             continue;
         }
-        draft_threads += 1;
-        let location = match (&thread.anchor.path, &thread.anchor.lines) {
-            (Some(path), Some(l)) => format!("{path}:{}-{}", l.start, l.end),
-            (Some(path), None) => path.clone(),
-            _ => format!("commit {}", &thread.anchor.diff.head.as_str()[..12]),
-        };
-        let mut drafted: Vec<&(EventId, Event)> =
+        let mut events: Vec<&(EventId, Event)> =
             thread.events.iter().filter(|(id, _)| thread.drafts.contains(id)).collect();
-        drafted.sort_by_key(|(id, event)| (event.ts.clone(), id.clone()));
-        for (id, event) in drafted {
-            // A drafted root gets the anchor location; later events point at
-            // their thread, the way the conversation view labels them.
-            let context = if *id == thread.id {
-                location.clone()
-            } else {
-                format!("thread {}", short(&thread.id))
-            };
-            let kind = String::from(event.kind.clone());
-            let mut line =
-                format!("  {}  {context}", ui.yellow(format_args!("{kind:<7} {}", short(id))));
-            if let Some(first) = event.body.as_deref().and_then(|b| b.lines().next()) {
-                line.push_str(&format!("  {}", ui.dim(first)));
-            }
-            lines.push(line);
-        }
-    }
-    if lines.is_empty() {
-        println!("nothing drafted");
-    } else {
-        println!(
-            "{} drafted event{} in {} thread{} {}:",
-            lines.len(),
-            if lines.len() == 1 { "" } else { "s" },
-            draft_threads,
-            if draft_threads == 1 { "" } else { "s" },
-            ui.dim("(git threads commit to seal, discard to drop)")
-        );
-        for line in &lines {
-            println!("{line}");
-        }
+        events.sort_by_key(|(id, event)| (event.ts.clone(), id.clone()));
+        drafted.push(ThreadDrafts {
+            thread: thread.id.clone(),
+            anchor: thread.anchor.clone(),
+            events: events
+                .into_iter()
+                .map(|(id, event)| DraftedEvent {
+                    id: id.clone(),
+                    kind: event.kind.clone(),
+                    body: event.body.clone(),
+                })
+                .collect(),
+        });
     }
 
     let local = match store.tip()? {
@@ -1558,6 +1053,7 @@ pub fn status(store: &Store) -> Result<()> {
         None => Default::default(),
     };
     let workdir = workdir(store)?;
+    let mut remotes: Vec<RemoteStatus> = Vec::new();
     for remote in git(&workdir, &["remote"])?.lines() {
         let unpushed = match store.tracking_tip(remote)? {
             Some(tracking) => {
@@ -1567,78 +1063,52 @@ pub fn status(store: &Store) -> Result<()> {
             // Never fetched from this remote: everything sealed is unshared.
             None => local.len(),
         };
-        if unpushed == 0 {
-            println!("up to date with {remote}");
-        } else {
-            println!(
-                "{unpushed} event{} not yet on {remote} {}",
-                if unpushed == 1 { "" } else { "s" },
-                ui.dim("(git threads push to share)")
-            );
-        }
+        remotes.push(RemoteStatus { remote: remote.to_string(), unpushed });
     }
 
     let seen = store.seen_event_ids()?;
     let me = identity(store.repo()).ok();
-    let with_news =
-        threads.iter().filter(|t| !unseen_ids(t, &seen, me.as_ref()).is_empty()).count();
-    if with_news > 0 {
-        println!(
-            "{with_news} thread{} with new activity {}",
-            if with_news == 1 { "" } else { "s" },
-            ui.dim("(git threads list --new)")
-        );
-    }
-    Ok(())
+    let threads_with_news = news_count(&threads, &seen, me.as_ref());
+    Ok(StatusView { drafted, remotes, threads_with_news })
 }
 
 /// Fetch the remote's threads data into the tracking ref and integrate it
-/// into the local ref (SPEC.md §7.2 steps 1–2).
-pub fn pull(store: &Store, remote: &str) -> Result<()> {
-    match fetch_and_integrate(store, remote)? {
-        None => println!("no threads data on {remote}"),
-        Some(integration) => report_integration(integration, remote),
-    }
-    Ok(())
+/// into the local ref (SPEC.md §7.2 steps 1–2). `None` when the remote has
+/// no threads data yet.
+pub fn pull(store: &Store, remote: &str) -> Result<Option<Integration>> {
+    fetch_and_integrate(store, remote)
 }
 
 /// Seal all drafts into the local data ref as one commit (SPEC.md §5.2
-/// session batching). Local only — `push` shares it.
-pub fn commit(store: &Store) -> Result<()> {
-    match store.commit_drafts()? {
-        Some(promoted) => println!(
-            "committed {} event{} in {} thread{} {}",
-            promoted.events,
-            if promoted.events == 1 { "" } else { "s" },
-            promoted.threads,
-            if promoted.threads == 1 { "" } else { "s" },
-            Ui::auto().dim("(git threads push to share)"),
-        ),
-        None => println!("nothing to commit (no drafts)"),
-    }
-    Ok(())
+/// session batching). Local only — `push` shares it. `None` when there was
+/// nothing to commit.
+pub fn commit(store: &Store) -> Result<Option<PromotedDrafts>> {
+    store.commit_drafts()
+}
+
+/// Outcome of the publish loop.
+#[derive(Clone, Copy, Debug)]
+pub enum PushOutcome {
+    Pushed,
+    /// No local threads data exists yet.
+    NothingToPush,
 }
 
 /// The publish loop (SPEC.md §7.2): integrate remote state, push the local
 /// data ref, and on a lost race re-integrate and retry. Drafts are not
 /// included — `commit` seals them first.
-pub fn push(store: &Store, remote: &str) -> Result<()> {
+pub fn push(store: &Store, remote: &str) -> Result<PushOutcome> {
     let workdir = workdir(store)?;
-    if store.drafts_tip()?.is_some() {
-        eprintln!("note: you have drafted events; git threads commit to include them");
-    }
     const MAX_ATTEMPTS: usize = 5;
     for attempt in 1..=MAX_ATTEMPTS {
         fetch_and_integrate(store, remote)?;
         let Some(tip) = store.tip()? else {
-            println!("nothing to push");
-            return Ok(());
+            return Ok(PushOutcome::NothingToPush);
         };
         match git(&workdir, &["push", remote, "refs/threads/data:refs/threads/data"]) {
             Ok(_) => {
                 store.record_pushed_tip(remote, tip)?;
-                println!("pushed to {remote}");
-                return Ok(());
+                return Ok(PushOutcome::Pushed);
             }
             Err(err) => {
                 let lost_race = err.to_string().contains("[rejected]")
@@ -1819,10 +1289,6 @@ fn find_message(store: &Store, prefix: &str) -> Result<(ThreadRecord, FoldedEven
             matches.iter().map(|(_, e)| short(&e.id)).collect::<Vec<_>>().join(", ")
         ),
     }
-}
-
-fn short(id: &EventId) -> &str {
-    &id.as_str()[..12]
 }
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {

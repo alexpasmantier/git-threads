@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use git_threads::commands::{self, CommentOpts, ListOpts};
+use git_threads::commands::{self, CommentOpts, Discarded, ListOpts, PushOutcome, SnippetMode};
 use git_threads::editor;
+use git_threads::render;
 use git_threads::store::Store;
+use git_threads::ui::{Ui, short};
 use git_threads_core::Side;
 
 const COMMENT_HINT: &str = "Enter your message. Lines starting with '#' will be ignored,\n\
@@ -230,6 +232,7 @@ fn main() -> anyhow::Result<()> {
     // Reading commands page like git log; the pager winds down on drop.
     let _pager = matches!(command, Command::List { .. } | Command::Show { .. })
         .then(git_threads::pager::Pager::start);
+    let ui = Ui::auto();
     match command {
         Command::Init { remote } => commands::init(&store, &remote),
         Command::Deinit { force } => commands::deinit(&store, force),
@@ -249,18 +252,33 @@ fn main() -> anyhow::Result<()> {
                     editor::message(store.repo(), "", COMMENT_HINT)?
                 }
             };
-            commands::comment(&store, &CommentOpts { target, file, message, side: side.into() })?;
+            let thread =
+                commands::comment(&store, &CommentOpts { target, file, message, side: side.into() })?;
+            println!(
+                "drafted thread {} {}",
+                ui.yellow(short(&thread)),
+                ui.dim("(commit and push to share)")
+            );
             Ok(())
         }
         Command::Reply { thread, message } => {
             let message = match message {
                 Some(text) => text,
                 None => {
-                    let preview = commands::thread_preview(&store, &thread)?;
+                    let view = commands::thread_view(&store, &thread, "HEAD")?;
+                    let preview = format!(
+                        "replying to:\n\n{}",
+                        render::thread(Ui::plain(), &store, &view, SnippetMode::Auto)?
+                    );
                     editor::message(store.repo(), "", &format!("{COMMENT_HINT}\n\n{preview}"))?
                 }
             };
-            commands::reply(&store, &thread, &message)?;
+            let drafted = commands::reply(&store, &thread, &message)?;
+            println!(
+                "drafted reply {} to thread {}",
+                ui.yellow(short(&drafted.event)),
+                ui.yellow(short(&drafted.thread))
+            );
             Ok(())
         }
         Command::Edit { event, message } => {
@@ -271,39 +289,148 @@ fn main() -> anyhow::Result<()> {
                     editor::message(store.repo(), &seed, EDIT_HINT)?
                 }
             };
-            commands::edit(&store, &event, &message)?;
+            let amendment = commands::edit(&store, &event, &message)?;
+            println!(
+                "drafted edit of {} {}",
+                ui.yellow(short(&amendment.target)),
+                ui.dim(format_args!("(edit event {})", short(&amendment.event)))
+            );
             Ok(())
         }
         Command::Delete { event } => {
-            commands::delete(&store, &event)?;
+            let amendment = commands::delete(&store, &event)?;
+            println!("drafted retraction of {}", ui.yellow(short(&amendment.target)));
             Ok(())
         }
         Command::Move { thread, file, at } => {
-            commands::move_thread(&store, &thread, &file, &at)?;
+            let moved = commands::move_thread(&store, &thread, &file, &at)?;
+            let location = match moved.lines {
+                Some(l) => format!("{}:{}-{}", moved.path, l.start, l.end),
+                None => moved.path,
+            };
+            println!(
+                "drafted move of thread {} to {} {}",
+                ui.yellow(short(&moved.thread)),
+                ui.bold(location),
+                ui.dim("(commit and push to share)")
+            );
             Ok(())
         }
-        Command::Resolve { thread, reopen } => commands::resolve(&store, &thread, !reopen),
+        Command::Resolve { thread, reopen } => {
+            let thread = commands::resolve(&store, &thread, !reopen)?;
+            println!(
+                "thread {} {} {}",
+                ui.yellow(short(&thread)),
+                if reopen { "reopened" } else { "resolved" },
+                ui.dim("(draft)")
+            );
+            Ok(())
+        }
         Command::Discard { event, all } => match (event, all) {
-            (None, true) => commands::discard_all(&store),
-            (Some(event), false) => commands::discard(&store, &event),
+            (None, true) => {
+                match commands::discard_all(&store)? {
+                    0 => println!("no drafts"),
+                    n => println!("discarded {n} draft{}", if n == 1 { "" } else { "s" }),
+                }
+                Ok(())
+            }
+            (Some(event), false) => {
+                match commands::discard(&store, &event)? {
+                    Discarded::Thread { thread, events } => println!(
+                        "discarded draft thread {} {}",
+                        ui.yellow(short(&thread)),
+                        ui.dim(format_args!(
+                            "({events} event{})",
+                            if events == 1 { "" } else { "s" }
+                        )),
+                    ),
+                    Discarded::Event(event) => {
+                        println!("discarded draft {}", ui.yellow(short(&event)))
+                    }
+                }
+                Ok(())
+            }
             _ => anyhow::bail!("pass a draft event ID, or --all"),
         },
         Command::Show { thread, at, patch, stat, json } => {
+            let view = commands::thread_view(&store, &thread, &at)?;
             if json {
-                return commands::show_json(&store, &thread, &at);
+                // Unlike show proper, --json does not mark the thread seen —
+                // a polling tool must not clear the user's inbox.
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
             }
             let mode = match (patch, stat) {
-                (true, _) => commands::SnippetMode::Patch,
-                (_, true) => commands::SnippetMode::Stat,
-                _ => commands::SnippetMode::Auto,
+                (true, _) => SnippetMode::Patch,
+                (_, true) => SnippetMode::Stat,
+                _ => SnippetMode::Auto,
             };
-            commands::show(&store, &thread, &at, mode)
+            print!("{}", render::thread(ui, &store, &view, mode)?);
+            // Reading a thread is what "seen" means; from here on it's not news.
+            store.mark_thread_seen(&view.id)?;
+            Ok(())
         }
-        Command::Status => commands::status(&store),
-        Command::Seen { thread, undo } => commands::seen(&store, thread.as_deref(), undo),
-        Command::Pull { remote } => commands::pull(&store, &remote),
-        Command::Commit => commands::commit(&store),
-        Command::Push { remote } => commands::push(&store, &remote),
+        Command::Status => {
+            print!("{}", render::status(ui, &commands::status(&store)?));
+            Ok(())
+        }
+        Command::Seen { thread, undo } => {
+            if undo {
+                if !store.undo_seen()? {
+                    println!("nothing to undo (no seen mark)");
+                    return Ok(());
+                }
+                let with_news = commands::threads_with_news(&store)?;
+                println!(
+                    "rewound the seen mark; {with_news} thread{} with new activity",
+                    if with_news == 1 { "" } else { "s" }
+                );
+                return Ok(());
+            }
+            match thread {
+                Some(prefix) => {
+                    let thread = commands::resolve_thread(&store, &prefix)?;
+                    store.mark_thread_seen(&thread)?;
+                    println!("marked thread {} seen", ui.yellow(short(&thread)));
+                }
+                None => {
+                    store.mark_all_seen()?;
+                    println!("marked all threads seen");
+                }
+            }
+            Ok(())
+        }
+        Command::Pull { remote } => {
+            match commands::pull(&store, &remote)? {
+                None => println!("no threads data on {remote}"),
+                Some(integration) => println!("{}", integration.describe(&remote)),
+            }
+            Ok(())
+        }
+        Command::Commit => {
+            match commands::commit(&store)? {
+                Some(promoted) => println!(
+                    "committed {} event{} in {} thread{} {}",
+                    promoted.events,
+                    if promoted.events == 1 { "" } else { "s" },
+                    promoted.threads,
+                    if promoted.threads == 1 { "" } else { "s" },
+                    ui.dim("(git threads push to share)"),
+                ),
+                None => println!("nothing to commit (no drafts)"),
+            }
+            Ok(())
+        }
+        Command::Push { remote } => {
+            if store.drafts_tip()?.is_some() {
+                eprintln!("note: you have drafted events; git threads commit to include them");
+            }
+            match commands::push(&store, &remote)? {
+                PushOutcome::Pushed => println!("pushed to {remote}"),
+                PushOutcome::NothingToPush => println!("nothing to push"),
+            }
+            Ok(())
+        }
         Command::List {
             target,
             file,
@@ -326,7 +453,7 @@ fn main() -> anyhow::Result<()> {
                 (_, true) => Some(true),
                 _ => None,
             };
-            commands::list(
+            let views = commands::list(
                 &store,
                 &ListOpts {
                     target,
@@ -334,17 +461,36 @@ fn main() -> anyhow::Result<()> {
                     at,
                     resolved: state,
                     new,
-                    oneline,
-                    patch,
-                    stat,
-                    json,
                     max_count,
                     author,
                     grep,
                     since,
                     until,
                 },
-            )
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&views)?);
+                return Ok(());
+            }
+            if views.is_empty() {
+                println!("{}", ui.dim("no threads"));
+                return Ok(());
+            }
+            // list -p stays bounded (clipped hunks, diffstat for whole
+            // changes): across many threads a full patch each buries the
+            // list. show -p is the full-patch deep dive on one thread.
+            let snippet_mode = match (patch, stat) {
+                (_, true) => Some(SnippetMode::Stat),
+                (true, _) => Some(SnippetMode::Auto),
+                _ => None,
+            };
+            for (index, view) in views.iter().enumerate() {
+                if !oneline && index > 0 {
+                    println!();
+                }
+                print!("{}", render::list_entry(ui, &store, view, oneline, snippet_mode)?);
+            }
+            Ok(())
         }
         Command::Mangen { .. } => unreachable!("handled before store discovery"),
     }

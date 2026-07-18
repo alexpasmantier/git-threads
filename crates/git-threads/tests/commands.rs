@@ -398,7 +398,7 @@ fn json_output_carries_folded_state_and_placement() {
     let mut on_lines = opts("does b need a body?");
     on_lines.file = Some("src/lib.rs:2".into());
     let thread_id = commands::comment(&store, &on_lines).unwrap();
-    let reply_id = commands::reply(&store, thread_id.as_str(), "wrong thread, sorry").unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "wrong thread, sorry").unwrap().event;
     commands::delete(&store, reply_id.as_str()).unwrap();
 
     let run = |args: &[&str]| {
@@ -554,7 +554,7 @@ fn edit_replaces_body_and_chains() {
     let store = Store::open(dir.path()).unwrap();
     let thread_id = commands::comment(&store, &opts("orignal")).unwrap();
 
-    let first_edit = commands::edit(&store, thread_id.as_str(), "original").unwrap();
+    let first_edit = commands::edit(&store, thread_id.as_str(), "original").unwrap().event;
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
     let folded = fold_thread(thread.events.clone());
     assert_eq!(folded.events[0].effective_body.as_deref(), Some("original"));
@@ -563,7 +563,7 @@ fn edit_replaces_body_and_chains() {
     assert_eq!(thread.events.iter().find(|(id, _)| *id == thread_id).unwrap().1.body.as_deref(), Some("orignal"));
 
     // A second edit supersedes the first edit (the chain tip), not the root.
-    let second_edit = commands::edit(&store, thread_id.as_str(), "original, take 3").unwrap();
+    let second_edit = commands::edit(&store, thread_id.as_str(), "original, take 3").unwrap().event;
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
     let event = &thread.events.iter().find(|(id, _)| *id == second_edit).unwrap().1;
     assert_eq!(event.supersedes, Some(first_edit));
@@ -576,7 +576,7 @@ fn delete_retracts_and_blocks_further_edits() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
     let thread_id = commands::comment(&store, &opts("root")).unwrap();
-    let reply_id = commands::reply(&store, thread_id.as_str(), "oops, wrong thread").unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "oops, wrong thread").unwrap().event;
 
     commands::delete(&store, reply_id.as_str()).unwrap();
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
@@ -612,10 +612,10 @@ fn replying_to_a_reply_targets_it_within_the_same_thread() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
     let thread_id = commands::comment(&store, &opts("root question")).unwrap();
-    let first_reply = commands::reply(&store, thread_id.as_str(), "first answer").unwrap();
+    let first_reply = commands::reply(&store, thread_id.as_str(), "first answer").unwrap().event;
 
     // Reply by naming the reply, not the thread.
-    let second_reply = commands::reply(&store, first_reply.as_str(), "disagree with that").unwrap();
+    let second_reply = commands::reply(&store, first_reply.as_str(), "disagree with that").unwrap().event;
     let thread = store.read_thread(&thread_id).unwrap().expect("same thread");
     let event = &thread.events.iter().find(|(id, _)| *id == second_reply).unwrap().1;
     assert_eq!(event.in_reply_to, Some(first_reply.clone()));
@@ -668,7 +668,7 @@ fn drafts_are_visible_and_marked_before_publish() {
     assert!(thread.drafts.contains(&thread_id), "root marked as draft");
 
     // Drafted events are addressable: replying to a draft works.
-    let reply_id = commands::reply(&store, thread_id.as_str(), "reply to a draft").unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "reply to a draft").unwrap().event;
     let thread = store.read_thread(&thread_id).unwrap().unwrap();
     assert!(thread.drafts.contains(&reply_id));
 }
@@ -678,7 +678,7 @@ fn discard_removes_a_draft_or_a_whole_draft_thread() {
     let dir = setup_repo();
     let store = Store::open(dir.path()).unwrap();
     let thread_id = commands::comment(&store, &opts("keep or toss")).unwrap();
-    let reply_id = commands::reply(&store, thread_id.as_str(), "toss this").unwrap();
+    let reply_id = commands::reply(&store, thread_id.as_str(), "toss this").unwrap().event;
 
     commands::discard(&store, reply_id.as_str()).unwrap();
     let thread = store.read_thread(&thread_id).unwrap().unwrap();

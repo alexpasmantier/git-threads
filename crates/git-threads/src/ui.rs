@@ -2,7 +2,7 @@
 //! everywhere else (pipes, NO_COLOR, TERM=dumb), the way git decides
 //! `color.ui=auto`.
 
-use git_threads_core::Timestamp;
+use git_threads_core::{EventId, Timestamp};
 use std::fmt::Display;
 use std::io::IsTerminal;
 
@@ -62,6 +62,11 @@ impl Ui {
     pub fn cyan(&self, text: impl Display) -> String {
         self.paint("36", text)
     }
+}
+
+/// The 12-hex-character short form IDs display as, git style.
+pub fn short(id: &EventId) -> &str {
+    &id.as_str()[..12]
 }
 
 /// Git's log date format ("Sun Jul 13 21:49:00 2026 +0000"). Threads

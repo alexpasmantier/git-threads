@@ -10,7 +10,7 @@ use gix::ObjectId;
 
 /// Where to display a thread on a target commit (SPEC.md §4.2). Pure
 /// function of (anchor, target) — cacheable, never stored.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reanchor {
     /// Commit-kind anchors describe the whole change; nothing to re-map.
     WholeCommit,
@@ -18,6 +18,37 @@ pub enum Reanchor {
     Located { path: String, lines: Option<LineRange>, status: ReanchorStatus },
     /// Step 4: no unique match; display against the anchor's own diff.
     Outdated,
+}
+
+/// The `placement` object `--json` documents: `kind` tags the variant, and
+/// a located placement carries `path`, `lines` (when the anchor has them),
+/// `status` (`exact` / `relocated` / `fuzzy`), and `fuzz` when fuzzy.
+impl serde::Serialize for Reanchor {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        match self {
+            Reanchor::WholeCommit => map.serialize_entry("kind", "whole-commit")?,
+            Reanchor::Outdated => map.serialize_entry("kind", "outdated")?,
+            Reanchor::Located { path, lines, status } => {
+                map.serialize_entry("kind", "located")?;
+                map.serialize_entry("path", path)?;
+                if let Some(lines) = lines {
+                    map.serialize_entry("lines", lines)?;
+                }
+                let (status, fuzz) = match status {
+                    ReanchorStatus::Exact => ("exact", None),
+                    ReanchorStatus::Relocated => ("relocated", None),
+                    ReanchorStatus::Fuzzy(f) => ("fuzzy", Some(*f)),
+                };
+                map.serialize_entry("status", status)?;
+                if let Some(fuzz) = fuzz {
+                    map.serialize_entry("fuzz", &fuzz)?;
+                }
+            }
+        }
+        map.end()
+    }
 }
 
 pub fn reanchor(store: &Store, anchor: &Anchor, target: ObjectId) -> Result<Reanchor> {

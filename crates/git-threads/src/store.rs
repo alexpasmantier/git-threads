@@ -681,6 +681,18 @@ pub enum Integration {
     Merged,
 }
 
+impl Integration {
+    /// One line for the human: what integrating from `remote` did.
+    pub fn describe(&self, remote: &str) -> String {
+        match self {
+            Integration::UpToDate => "already up to date".into(),
+            Integration::Initialized => format!("initialized from {remote}"),
+            Integration::FastForwarded => format!("fast-forwarded to {remote}"),
+            Integration::Merged => format!("merged threads from {remote}"),
+        }
+    }
+}
+
 impl Store {
     /// The local tracking ref for `remote`'s threads data (SPEC.md §7.1).
     pub fn tracking_ref(remote: &str) -> String {

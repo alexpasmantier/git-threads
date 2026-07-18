@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 git-threads-core.workspace = true
 anyhow.workspace = true
+serde.workspace = true
 clap.workspace = true
 clap_mangen.workspace = true
 gix = { version = "0.85.0", features = ["tree-editor"] }

@@ -268,8 +268,8 @@ $ git threads list --grep "sigpipe"          # where did we discuss that?
 `--json` swaps the rendered blocks for one JSON array — the interface for anything that
 isn't a person: editor plugins, agents, CI. Every filter composes with it. Each element
 carries the thread's `id`, `resolved` state, its `anchor` (the anchor.json document,
-SPEC.md §3, verbatim), the `moved_to` anchor when the thread was re-pinned (null
-otherwise), the commit it was re-anchored `at`, the resulting `placement`
+SPEC.md §3, verbatim), the `moved_to` anchor and `moved_by` author when the thread was
+re-pinned (null otherwise), the commit it was re-anchored `at`, the resulting `placement`
 (`{"kind": "whole-commit" | "located" | "outdated"}`, with `path`/`lines`/`status` and
 `fuzz` when located), and its `messages` — folded state, so each message has its current
 `body` (null when retracted) plus `edited`/`retracted`/`draft` flags. Raw events stay one

@@ -409,6 +409,7 @@ dependencies = [
  "gix",
  "jiff",
  "libc",
+ "serde",
  "serde_json",
  "tempfile",
 ]
