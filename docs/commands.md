@@ -393,7 +393,8 @@ Liberate your review history: a GitHub PR's review threads become ordinary threa
 repository — original authors (as their stable `noreply` identities), timestamps, reply
 chains, resolution state, and anchors rebuilt from the forge's position data, so old
 discussions re-anchor onto today's code like any other thread. `--all` walks every PR of
-the repository, one publish commit per PR. Fetching goes through the
+the repository — swept in bulk, 50 PRs per API request, with scan and fetch progress on
+stderr — and publishes one commit per PR. Fetching goes through the
 [`gh` CLI](https://cli.github.com) (its login is the only authentication needed); a URL may
 name any repository, not just the remote's.
 

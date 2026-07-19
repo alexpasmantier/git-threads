@@ -123,10 +123,22 @@ impl ImportReport {
     }
 }
 
+/// One PR's review threads, ready to map.
+struct PrThreads {
+    number: u64,
+    base_ref_oid: String,
+    threads: Vec<ReviewThread>,
+}
+
 /// Import review threads from GitHub: one PR (a number or URL), or with
 /// `all`, every PR of the repository. Objects are fetched from `remote`
 /// (or the repository a URL names); each PR with anything new becomes one
 /// publish commit, so a long `--all` run keeps its progress on failure.
+///
+/// The network is the slow part, so it is batched: `--all` sweeps review
+/// threads for 50 PRs per API request, and all missing commits arrive in
+/// two `git fetch` round trips however many PRs the run covers. Progress
+/// for each network phase goes to stderr.
 pub fn github(store: &Store, remote: &str, spec: Option<&str>, all: bool) -> Result<ImportReport> {
     let workdir = store
         .repo()
@@ -136,57 +148,64 @@ pub fn github(store: &Store, remote: &str, spec: Option<&str>, all: bool) -> Res
     let remote_url = commands::git(&workdir, &["remote", "get-url", remote])?;
     let remote_slug = github_slug(remote_url.trim());
 
-    let (slug, source, numbers) = if all {
-        let slug = remote_slug
-            .with_context(|| format!("remote {remote:?} does not point at github.com"))?;
-        (slug.clone(), remote.to_string(), all_pr_numbers(&slug)?)
-    } else {
-        let spec = spec.context("pass a PR number or URL, or --all")?;
-        let (url_slug, number) = parse_spec(spec)
-            .with_context(|| format!("cannot parse {spec:?} as a PR number or GitHub PR URL"))?;
-        match url_slug {
-            // A URL names its repository; fetch objects straight from it
-            // when it isn't the one `remote` points at.
-            Some(slug) if remote_slug.as_ref() != Some(&slug) => {
-                let source = format!("https://github.com/{}/{}", slug.0, slug.1);
-                (slug, source, vec![number])
-            }
-            _ => {
-                let slug = remote_slug
-                    .with_context(|| format!("remote {remote:?} does not point at github.com"))?;
-                (slug, remote.to_string(), vec![number])
-            }
+    let (slug, source) = match spec.and_then(parse_spec) {
+        // A URL names its repository; fetch objects straight from it when
+        // it isn't the one `remote` points at.
+        Some((Some(slug), _)) if remote_slug.as_ref() != Some(&slug) => {
+            let source = format!("https://github.com/{}/{}", slug.0, slug.1);
+            (slug, source)
+        }
+        _ => {
+            let slug = remote_slug
+                .with_context(|| format!("remote {remote:?} does not point at github.com"))?;
+            (slug, remote.to_string())
         }
     };
 
-    let mut report = ImportReport::default();
-    for number in numbers {
+    let prs: Vec<PrThreads> = if all {
+        fetch_all_threads(&slug)?
+    } else {
+        let spec = spec.context("pass a PR number or URL, or --all")?;
+        let (_, number) = parse_spec(spec)
+            .with_context(|| format!("cannot parse {spec:?} as a PR number or GitHub PR URL"))?;
         let Some((base_ref_oid, threads)) = fetch_threads(&slug, number)? else {
-            if !all {
-                bail!("no pull request #{number} in {}/{}", slug.0, slug.1);
-            }
-            continue;
+            bail!("no pull request #{number} in {}/{}", slug.0, slug.1);
         };
         if threads.is_empty() {
-            if !all {
-                println!("PR #{number}: no review threads");
-            }
-            continue;
+            println!("PR #{number}: no review threads");
+            return Ok(ImportReport::default());
         }
-        ensure_objects(store, &workdir, &source, number, &base_ref_oid, &threads);
-        let pr = apply(store, &base_ref_oid, &threads)
-            .with_context(|| format!("importing PR #{number}"))?;
-        if pr.events > 0 || !all {
+        vec![PrThreads { number, base_ref_oid, threads }]
+    };
+    if prs.is_empty() {
+        return Ok(ImportReport::default());
+    }
+
+    ensure_objects(store, &workdir, &source, &prs);
+    // One index for the whole run: a review thread (and every comment in
+    // it) belongs to exactly one PR, so nothing written for one PR is ever
+    // referenced while mapping another.
+    let index = origin_index(store)?;
+    let mut report = ImportReport::default();
+    for pr in &prs {
+        let outcome = apply_with(store, &pr.base_ref_oid, &pr.threads, &index)
+            .with_context(|| format!("importing PR #{}", pr.number))?;
+        if outcome.events > 0 || !all {
             println!(
-                "PR #{number}: {} event{} in {} thread{}{}",
-                pr.events,
-                if pr.events == 1 { "" } else { "s" },
-                pr.threads,
-                if pr.threads == 1 { "" } else { "s" },
-                if pr.known > 0 { format!(" ({} already imported)", pr.known) } else { String::new() },
+                "PR #{}: {} event{} in {} thread{}{}",
+                pr.number,
+                outcome.events,
+                if outcome.events == 1 { "" } else { "s" },
+                outcome.threads,
+                if outcome.threads == 1 { "" } else { "s" },
+                if outcome.known > 0 {
+                    format!(" ({} already imported)", outcome.known)
+                } else {
+                    String::new()
+                },
             );
         }
-        report.absorb(pr);
+        report.absorb(outcome);
         report.prs += 1;
     }
     Ok(report)
@@ -196,12 +215,20 @@ pub fn github(store: &Store, remote: &str, spec: Option<&str>, all: bool) -> Res
 /// when nothing is new). The deterministic core: given the same thread data
 /// and the same git objects, every clone writes byte-identical events.
 pub fn apply(store: &Store, base_ref_oid: &str, threads: &[ReviewThread]) -> Result<ImportReport> {
-    let index = origin_index(store)?;
+    apply_with(store, base_ref_oid, threads, &origin_index(store)?)
+}
+
+fn apply_with(
+    store: &Store,
+    base_ref_oid: &str,
+    threads: &[ReviewThread],
+    index: &BTreeMap<String, (ThreadId, EventId)>,
+) -> Result<ImportReport> {
     let mut batch = Batch::default();
     let mut report = ImportReport::default();
 
     for thread in threads {
-        match map_thread(store, base_ref_oid, thread, &index, &mut batch, &mut report) {
+        match map_thread(store, base_ref_oid, thread, index, &mut batch, &mut report) {
             Ok(()) => {}
             Err(err) => {
                 eprintln!("warning: skipping thread on {}: {err:#}", thread.path);
@@ -450,38 +477,51 @@ fn origin_index(store: &Store) -> Result<BTreeMap<String, (ThreadId, EventId)>> 
     Ok(index)
 }
 
-/// Make the commits the threads anchor to fetchable locally: the PR head
-/// ref first (GitHub keeps `refs/pull/N/head` after branch deletion), then
-/// any still-missing commit by SHA (GitHub serves arbitrary reachable
-/// objects). Best effort — mapping skips what stays missing, honestly.
-fn ensure_objects(
-    store: &Store,
-    workdir: &std::path::Path,
-    source: &str,
-    number: u64,
-    base_ref_oid: &str,
-    threads: &[ReviewThread],
-) {
-    let mut wanted: Vec<&str> = vec![base_ref_oid];
-    wanted.extend(threads.iter().flat_map(|t| &t.comments.nodes).filter_map(|c| {
-        c.original_commit.as_ref().map(|c| c.oid.as_str())
-    }));
-    wanted.sort_unstable();
-    wanted.dedup();
-    if wanted.iter().all(|oid| commit(store.repo(), oid).is_ok()) {
+/// Make the commits the threads anchor to fetchable locally, in two round
+/// trips however many PRs are involved: one fetch of every needed PR head
+/// ref (GitHub keeps `refs/pull/N/head` after branch deletion), then one
+/// fetch by SHA for anything still missing (GitHub serves arbitrary
+/// reachable objects). Best effort — mapping skips what stays missing,
+/// honestly.
+fn ensure_objects(store: &Store, workdir: &std::path::Path, source: &str, prs: &[PrThreads]) {
+    let wanted_of = |pr: &PrThreads| {
+        std::iter::once(pr.base_ref_oid.clone())
+            .chain(
+                pr.threads
+                    .iter()
+                    .flat_map(|t| &t.comments.nodes)
+                    .filter_map(|c| c.original_commit.as_ref().map(|c| c.oid.clone())),
+            )
+            .collect::<Vec<String>>()
+    };
+    let incomplete: Vec<&PrThreads> = prs
+        .iter()
+        .filter(|pr| wanted_of(pr).iter().any(|oid| commit(store.repo(), oid).is_err()))
+        .collect();
+    if incomplete.is_empty() {
         return;
     }
-    let _ = commands::git(
-        workdir,
-        &["fetch", "--quiet", source, &format!("refs/pull/{number}/head")],
+    eprintln!(
+        "fetching commits for {} PR{} from {source}",
+        incomplete.len(),
+        if incomplete.len() == 1 { "" } else { "s" }
     );
-    let missing: Vec<&str> = wanted
-        .into_iter()
+    let head_refs: Vec<String> =
+        incomplete.iter().map(|pr| format!("refs/pull/{}/head", pr.number)).collect();
+    let mut args: Vec<&str> = vec!["fetch", "--quiet", source];
+    args.extend(head_refs.iter().map(String::as_str));
+    let _ = commands::git(workdir, &args);
+
+    let mut missing: Vec<String> = incomplete
+        .iter()
+        .flat_map(|pr| wanted_of(pr))
         .filter(|oid| commit(store.repo(), oid).is_err())
         .collect();
+    missing.sort_unstable();
+    missing.dedup();
     if !missing.is_empty() {
-        let mut args = vec!["fetch", "--quiet", source];
-        args.extend(missing);
+        let mut args: Vec<&str> = vec!["fetch", "--quiet", source];
+        args.extend(missing.iter().map(String::as_str));
         let _ = commands::git(workdir, &args);
     }
 }
@@ -527,62 +567,169 @@ fn parse_spec(spec: &str) -> Option<(Option<(String, String)>, u64)> {
     spec.strip_prefix('#').unwrap_or(spec).parse().ok().map(|number| (None, number))
 }
 
-/// Every PR number of the repository, oldest first.
-fn all_pr_numbers(slug: &(String, String)) -> Result<Vec<u64>> {
-    let out = gh(&[
-        "api",
-        &format!("repos/{}/{}/pulls?state=all&per_page=100", slug.0, slug.1),
-        "--paginate",
-        "-q",
-        ".[].number",
-    ])?;
-    let mut numbers: Vec<u64> = out.lines().filter_map(|line| line.trim().parse().ok()).collect();
-    numbers.sort_unstable();
-    Ok(numbers)
+/// The selections both thread queries share, so the two can never drift.
+const THREAD_FIELDS: &str = "\
+id isResolved path subjectType
+diffSide startDiffSide originalLine originalStartLine
+resolvedBy{login databaseId}";
+
+const COMMENT_FIELDS: &str = "\
+id url body createdAt
+author{login ... on User{databaseId} ... on Bot{databaseId}}
+originalCommit{oid}
+replyTo{id}";
+
+/// One PR's review threads, paginated: the single-PR path, and the
+/// fallback when a PR overflows its slot in the bulk sweep.
+fn threads_query() -> String {
+    format!(
+        "query($owner:String!,$name:String!,$number:Int!,$cursor:String){{
+  repository(owner:$owner,name:$name){{
+    pullRequest(number:$number){{
+      baseRefOid
+      reviewThreads(first:50,after:$cursor){{
+        pageInfo{{hasNextPage endCursor}}
+        nodes{{
+          {THREAD_FIELDS}
+          comments(first:100){{
+            pageInfo{{hasNextPage endCursor}}
+            nodes{{ {COMMENT_FIELDS} }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"
+    )
 }
 
-const THREADS_QUERY: &str = "\
-query($owner:String!,$name:String!,$number:Int!,$cursor:String){
-  repository(owner:$owner,name:$name){
-    pullRequest(number:$number){
-      baseRefOid
-      reviewThreads(first:50,after:$cursor){
-        pageInfo{hasNextPage endCursor}
-        nodes{
-          id isResolved path subjectType
-          diffSide startDiffSide originalLine originalStartLine
-          resolvedBy{login databaseId}
-          comments(first:100){
-            pageInfo{hasNextPage endCursor}
-            nodes{
-              id url body createdAt
-              author{login ... on User{databaseId} ... on Bot{databaseId}}
-              originalCommit{oid}
-              replyTo{id}
-            }
-          }
-        }
-      }
-    }
-  }
-}";
+/// The rest of an overlong thread's comments.
+fn comments_query() -> String {
+    format!(
+        "query($id:ID!,$cursor:String){{
+  node(id:$id){{
+    ... on PullRequestReviewThread{{
+      comments(first:100,after:$cursor){{
+        pageInfo{{hasNextPage endCursor}}
+        nodes{{ {COMMENT_FIELDS} }}
+      }}
+    }}
+  }}
+}}"
+    )
+}
 
-const COMMENTS_QUERY: &str = "\
-query($id:ID!,$cursor:String){
-  node(id:$id){
-    ... on PullRequestReviewThread{
-      comments(first:100,after:$cursor){
-        pageInfo{hasNextPage endCursor}
-        nodes{
-          id url body createdAt
-          author{login ... on User{databaseId} ... on Bot{databaseId}}
-          originalCommit{oid}
-          replyTo{id}
+/// The `--all` sweep: review threads for 50 PRs per request, oldest first.
+/// The inner page sizes are deliberately modest — they keep the query cheap
+/// against GitHub's rate-limit scoring, and a PR or thread that overflows
+/// falls back to its own paginated fetch.
+fn prs_query() -> String {
+    format!(
+        "query($owner:String!,$name:String!,$cursor:String){{
+  repository(owner:$owner,name:$name){{
+    pullRequests(first:50,after:$cursor,orderBy:{{field:CREATED_AT,direction:ASC}}){{
+      totalCount
+      pageInfo{{hasNextPage endCursor}}
+      nodes{{
+        number baseRefOid
+        reviewThreads(first:20){{
+          pageInfo{{hasNextPage endCursor}}
+          nodes{{
+            {THREAD_FIELDS}
+            comments(first:50){{
+              pageInfo{{hasNextPage endCursor}}
+              nodes{{ {COMMENT_FIELDS} }}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"
+    )
+}
+
+#[derive(Deserialize)]
+struct PrsResponse {
+    data: Option<PrsData>,
+}
+#[derive(Deserialize)]
+struct PrsData {
+    repository: Option<PrsRepo>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrsRepo {
+    pull_requests: Option<PrConnection>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrConnection {
+    total_count: u64,
+    page_info: PageInfo,
+    nodes: Vec<PrNode>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrNode {
+    number: u64,
+    base_ref_oid: String,
+    review_threads: Page<ReviewThread>,
+}
+
+/// Review threads of every PR in the repository, swept in bulk with
+/// progress on stderr — the scan is the run's network-bound phase.
+fn fetch_all_threads(slug: &(String, String)) -> Result<Vec<PrThreads>> {
+    let mut out: Vec<PrThreads> = Vec::new();
+    let mut scanned = 0usize;
+    let mut cursor: Option<String> = None;
+    loop {
+        let query = format!("query={}", prs_query());
+        let owner = format!("owner={}", slug.0);
+        let name = format!("name={}", slug.1);
+        let mut args = vec!["api", "graphql", "-f", &query, "-f", &owner, "-f", &name];
+        let cursor_field = cursor.as_ref().map(|c| format!("cursor={c}"));
+        if let Some(field) = &cursor_field {
+            args.extend(["-f", field]);
         }
-      }
+        let response: PrsResponse =
+            serde_json::from_str(&gh(&args)?).context("unexpected gh api graphql output")?;
+        let page = response
+            .data
+            .and_then(|d| d.repository)
+            .and_then(|r| r.pull_requests)
+            .context("repository not found (or not visible to gh's login)")?;
+        scanned += page.nodes.len();
+        for pr in page.nodes {
+            let threads = if pr.review_threads.page_info.has_next_page {
+                // More threads than the sweep's slot: refetch this PR whole.
+                match fetch_threads(slug, pr.number)? {
+                    Some((_, threads)) => threads,
+                    None => continue,
+                }
+            } else {
+                let mut threads = pr.review_threads.nodes;
+                for thread in &mut threads {
+                    fetch_remaining_comments(thread)?;
+                }
+                threads
+            };
+            if !threads.is_empty() {
+                out.push(PrThreads { number: pr.number, base_ref_oid: pr.base_ref_oid, threads });
+            }
+        }
+        eprintln!(
+            "scanned {scanned}/{} PRs ({} with review threads)",
+            page.total_count,
+            out.len()
+        );
+        if !page.page_info.has_next_page {
+            break;
+        }
+        cursor = page.page_info.end_cursor;
     }
-  }
-}";
+    Ok(out)
+}
 
 #[derive(Deserialize)]
 struct ThreadsResponse {
@@ -626,7 +773,7 @@ fn fetch_threads(
     let mut base_ref_oid: Option<String> = None;
     let mut cursor: Option<String> = None;
     loop {
-        let query = format!("query={THREADS_QUERY}");
+        let query = format!("query={}", threads_query());
         let owner = format!("owner={}", slug.0);
         let name = format!("name={}", slug.1);
         let number_field = format!("number={number}");
@@ -667,7 +814,7 @@ fn fetch_remaining_comments(thread: &mut ReviewThread) -> Result<()> {
             break;
         };
         let id = format!("id={}", thread.id);
-        let query = format!("query={COMMENTS_QUERY}");
+        let query = format!("query={}", comments_query());
         let cursor_field = format!("cursor={cursor}");
         let out = gh(&["api", "graphql", "-f", &query, "-f", &id, "-f", &cursor_field])?;
         let response: CommentsResponse =
