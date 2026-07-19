@@ -247,7 +247,7 @@ Tooling
 - **Desktop review client**: syntax highlighting, LSP navigation, search — the niceties web review UIs lack.
 - **Agent integration**: discuss changes with an agent whose commentary persists as threads; conventions for agent long-form output (attachments, soft body-size cap — agent verbosity is the assumption most likely to break the storage math).
 - **Notification bridge**: polling fetch, webhook adapter, or email digest — how a colleague learns there's something new.
-- **Client-local niceties** (explicitly outside the shared format): draft/unpublished comments (the reference CLI stages them on a local-only `refs/threads/drafts`), read-unread tracking (the reference CLI keeps a seen snapshot on a local-only `refs/threads/seen`), re-anchor cache.
+- **Client-local niceties** (explicitly outside the shared format): draft/unpublished comments (the reference CLI stages them on a local-only `refs/threads/drafts`), read-unread tracking (the reference CLI keeps a seen snapshot on a local-only `refs/threads/seen`), re-anchor cache (the reference CLI keeps one under `.git/threads/reanchor/`).
 
 Open questions
 

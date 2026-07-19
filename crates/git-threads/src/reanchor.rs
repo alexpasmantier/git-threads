@@ -5,8 +5,13 @@
 
 use crate::store::Store;
 use anyhow::{Context, Result};
-use git_threads_core::{Anchor, LineRange, ReanchorStatus, derive_snippet, locate_snippet};
+use git_threads_core::{
+    Anchor, EventId, LineRange, ReanchorStatus, derive_snippet, locate_snippet,
+    to_canonical_json,
+};
 use gix::ObjectId;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// Where to display a thread on a target commit (SPEC.md §4.2). Pure
 /// function of (anchor, target) — cacheable, never stored.
@@ -51,6 +56,44 @@ impl serde::Serialize for Reanchor {
     }
 }
 
+/// The inverse of the custom `Serialize`, so cached placements — and anyone
+/// holding the documented `--json` shape — can round-trip.
+impl<'de> serde::Deserialize<'de> for Reanchor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            kind: String,
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            lines: Option<LineRange>,
+            #[serde(default)]
+            status: Option<String>,
+            #[serde(default)]
+            fuzz: Option<u8>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        match raw.kind.as_str() {
+            "whole-commit" => Ok(Reanchor::WholeCommit),
+            "outdated" => Ok(Reanchor::Outdated),
+            "located" => {
+                let path = raw.path.ok_or_else(|| D::Error::missing_field("path"))?;
+                let status = match raw.status.as_deref() {
+                    Some("exact") => ReanchorStatus::Exact,
+                    Some("relocated") => ReanchorStatus::Relocated,
+                    Some("fuzzy") => ReanchorStatus::Fuzzy(raw.fuzz.unwrap_or(0)),
+                    other => {
+                        return Err(D::Error::custom(format!("unknown placement status {other:?}")));
+                    }
+                };
+                Ok(Reanchor::Located { path, lines: raw.lines, status })
+            }
+            other => Err(D::Error::custom(format!("unknown placement kind {other:?}"))),
+        }
+    }
+}
+
 pub fn reanchor(store: &Store, anchor: &Anchor, target: ObjectId) -> Result<Reanchor> {
     let repo = store.repo();
     let Some(path) = anchor.path.as_deref() else {
@@ -63,13 +106,18 @@ pub fn reanchor(store: &Store, anchor: &Anchor, target: ObjectId) -> Result<Rean
         .and_then(|b| Ok(ObjectId::from_hex(b.as_str().as_bytes())?))?;
 
     // Candidates in order: the anchored path, then its rename-detected
-    // successor. Rename detection is best-effort — it shells out to
-    // `git diff -M` and a failure (e.g. the anchor's head missing locally)
-    // just means no rename candidate.
+    // successor. Rename detection only makes sense when the anchored path
+    // is gone from the target tree (`git diff -M` reports renames of
+    // deleted paths, so a surviving path can never have one) — which also
+    // keeps the subprocess it shells out to off the common path. It is
+    // best-effort: a failure (e.g. the anchor's head missing locally) just
+    // means no rename candidate.
     let mut candidates = vec![path.to_string()];
-    let anchor_head = ObjectId::from_hex(anchor.diff.head.as_str().as_bytes())?;
-    if let Some(renamed) = detect_rename(store, anchor_head, target, path) {
-        candidates.push(renamed);
+    if blob_at(repo, target, path)?.is_none() {
+        let anchor_head = ObjectId::from_hex(anchor.diff.head.as_str().as_bytes())?;
+        if let Some(renamed) = detect_rename(store, anchor_head, target, path) {
+            candidates.push(renamed);
+        }
     }
 
     // Step 1: blob identity — the anchored file version exists unchanged.
@@ -144,6 +192,110 @@ fn detect_rename(store: &Store, from: ObjectId, to: ObjectId, path: &str) -> Opt
     None
 }
 
+/// Client-local re-anchor cache (SPEC.md "client-local niceties"). Placement
+/// is a pure function of (anchor, target commit), so computed answers are
+/// remembered in `.git/threads/reanchor/<target>.json` and never expire.
+/// Everything about it is best-effort: a missing, torn, or unparsable file
+/// just means recomputing, and deleting the directory is always safe.
+pub struct Cache {
+    target: ObjectId,
+    file: PathBuf,
+    entries: BTreeMap<String, Reanchor>,
+    dirty: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheFile {
+    v: u32,
+    entries: BTreeMap<String, Reanchor>,
+}
+
+impl Cache {
+    /// Per-target files kept around; older targets age out on save.
+    const KEEP: usize = 8;
+
+    pub fn open(repo: &gix::Repository, target: ObjectId) -> Cache {
+        let file = repo.git_dir().join("threads").join("reanchor").join(format!("{target}.json"));
+        let entries = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<CacheFile>(&text).ok())
+            .filter(|cache| cache.v == 1)
+            .map(|cache| cache.entries)
+            .unwrap_or_default();
+        Cache { target, file, entries, dirty: false }
+    }
+
+    /// The commit placements are computed against.
+    pub fn target(&self) -> ObjectId {
+        self.target
+    }
+
+    /// `anchor`'s placement on the target: served from the cache, else
+    /// computed and remembered. A result computed while the anchored head
+    /// commit is missing locally is not stored — fetching that commit later
+    /// can improve it (rename detection needs the commit).
+    pub fn placement(&mut self, store: &Store, anchor: &Anchor) -> Result<Reanchor> {
+        let key = anchor_key(anchor)?;
+        if let Some(hit) = self.entries.get(&key) {
+            return Ok(hit.clone());
+        }
+        let placement = reanchor(store, anchor, self.target)?;
+        let head = ObjectId::from_hex(anchor.diff.head.as_str().as_bytes())?;
+        if store.repo().find_commit(head).is_ok() {
+            self.entries.insert(key, placement.clone());
+            self.dirty = true;
+        }
+        Ok(placement)
+    }
+
+    /// Write the cache back if anything was added, and age out files for
+    /// targets not recently used.
+    pub fn save(&self) {
+        if !self.dirty {
+            return;
+        }
+        let Some(dir) = self.file.parent() else { return };
+        let _ = std::fs::create_dir_all(dir);
+        let Ok(text) = serde_json::to_string(&CacheFile { v: 1, entries: self.entries.clone() })
+        else {
+            return;
+        };
+        // Write-then-rename so a concurrent reader never sees a torn file.
+        let tmp = self.file.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &self.file);
+        }
+        prune(dir, &self.file);
+    }
+}
+
+/// Content key of an anchor: the SHA-256 of its canonical bytes — the same
+/// hash the format names events with.
+fn anchor_key(anchor: &Anchor) -> Result<String> {
+    Ok(EventId::compute(&to_canonical_json(anchor)?).as_str().to_string())
+}
+
+/// Keep the newest [`Cache::KEEP`] files (the current target's included);
+/// stale target files and abandoned temp files age out with them.
+fn prune(dir: &Path, keep_file: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            (path != keep_file).then_some((modified, path))
+        })
+        .collect();
+    if files.len() < Cache::KEEP {
+        return;
+    }
+    files.sort();
+    for (_, path) in files.iter().take(files.len() + 1 - Cache::KEEP) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Blob ID of `path` in `commit`'s tree, if it is a file.
 pub fn blob_at(repo: &gix::Repository, commit: ObjectId, path: &str) -> Result<Option<ObjectId>> {
     let tree = repo.find_commit(commit)?.tree()?;
@@ -155,4 +307,26 @@ pub fn blob_at(repo: &gix::Repository, commit: ObjectId, path: &str) -> Result<O
 
 pub fn blob_content(repo: &gix::Repository, blob: ObjectId) -> Result<String> {
     Ok(String::from_utf8_lossy(&repo.find_blob(blob)?.data).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_json_round_trips() {
+        for placement in [
+            Reanchor::WholeCommit,
+            Reanchor::Outdated,
+            Reanchor::Located {
+                path: "src/lib.rs".into(),
+                lines: Some(LineRange { start: 3, end: 9 }),
+                status: ReanchorStatus::Fuzzy(2),
+            },
+            Reanchor::Located { path: "a".into(), lines: None, status: ReanchorStatus::Relocated },
+        ] {
+            let json = serde_json::to_string(&placement).unwrap();
+            assert_eq!(serde_json::from_str::<Reanchor>(&json).unwrap(), placement, "{json}");
+        }
+    }
 }

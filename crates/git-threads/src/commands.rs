@@ -121,6 +121,8 @@ pub fn deinit(store: &Store, force: bool) -> Result<()> {
         git(&workdir, &["update-ref", "-d", name])?;
         deleted += 1;
     }
+    // Client-local derived data (the re-anchor cache) goes with the refs.
+    let _ = std::fs::remove_dir_all(store.repo().git_dir().join("threads"));
     println!(
         "deleted {deleted} ref{} under refs/threads/; the remote's data is untouched \
          (git threads init to start again)",
@@ -648,6 +650,7 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
     threads.sort_by_key(|t| std::cmp::Reverse(t.events.iter().map(|(_, e)| e.ts.clone()).min()));
     let seen = store.seen_event_ids()?;
     let me = identity(repo).ok();
+    let mut cache = reanchor::Cache::open(repo, at_commit);
     let mut views: Vec<ThreadView> = Vec::new();
     for thread in threads {
         let unseen = unseen_ids(&thread, &seen, me.as_ref());
@@ -697,8 +700,9 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
         if opts.max_count.is_some_and(|n| views.len() >= n) {
             break;
         }
-        views.push(build_view(store, &thread, &folded, at_commit, &seen, me.as_ref())?);
+        views.push(build_view(store, &thread, &folded, &mut cache, &seen, me.as_ref())?);
     }
+    cache.save();
     Ok(views)
 }
 
@@ -729,12 +733,13 @@ fn build_view(
     store: &Store,
     thread: &ThreadRecord,
     folded: &FoldedThread,
-    at: ObjectId,
+    cache: &mut reanchor::Cache,
     seen: &BTreeSet<EventId>,
     me: Option<&Author>,
 ) -> Result<ThreadView> {
+    let at = cache.target();
     let unseen = unseen_ids(thread, seen, me);
-    let placement = reanchor::reanchor(store, effective_anchor(thread, folded), at)?;
+    let placement = cache.placement(store, effective_anchor(thread, folded))?;
     let (moved_to, moved_by) = match &folded.moved {
         Some((_, event)) => (event.anchor.clone(), Some(event.author.clone())),
         None => (None, None),
@@ -775,7 +780,10 @@ pub fn thread_view(store: &Store, prefix: &str, at: &str) -> Result<ThreadView> 
     let at = resolve_commit(store.repo(), at)?;
     let seen = store.seen_event_ids()?;
     let me = identity(store.repo()).ok();
-    build_view(store, &thread, &folded, at, &seen, me.as_ref())
+    let mut cache = reanchor::Cache::open(store.repo(), at);
+    let view = build_view(store, &thread, &folded, &mut cache, &seen, me.as_ref())?;
+    cache.save();
+    Ok(view)
 }
 
 /// The thread a prefix names: the thread ID, or the ID of any comment or

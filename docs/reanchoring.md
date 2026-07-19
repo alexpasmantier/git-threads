@@ -106,7 +106,12 @@ determinism requirement falls out of the purity.
 
 **Caching is sanctioned but local.** `(anchor, T)` are both immutable, so results are
 cacheable forever. Caches are client-local derived data, never part of the shared format —
-same policy as search indexes.
+same policy as search indexes. The reference CLI keeps one under
+`.git/threads/reanchor/<target>.json` (one file per target commit, oldest aged out), which
+is what makes `list` fast on repositories with hundreds of threads; deleting the directory
+is always safe. Rename detection is also skipped whenever the anchored path still exists on
+the target — a surviving path can never be a rename source, so most threads never pay for
+it.
 
 ## Observed behavior in this repository
 
