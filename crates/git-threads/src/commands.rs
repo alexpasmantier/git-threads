@@ -12,7 +12,7 @@ use git_threads_core::{
 use gix::ObjectId;
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// The fetch refspec `init` configures (SPEC.md §7.1): remote state lands in
 /// the tracking ref, never directly on `refs/threads/data` — a direct mapping
@@ -626,10 +626,10 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
     };
     if let Some(spec) = &target {
         let (base, head) = resolve_diff(repo, spec)?;
-        let commits = range_commits(repo, base, head)?;
+        let mut change = ChangeMembership::new(repo, base, head)?;
         threads.retain(|t| {
-            let on_range = |a: &Anchor| commits.contains(a.diff.head.as_str());
-            on_range(&t.anchor) || moved_anchor(t).as_ref().is_some_and(on_range)
+            change.contains(t.anchor.diff.head.as_str())
+                || moved_anchor(t).is_some_and(|a| change.contains(a.diff.head.as_str()))
         });
     }
     if let Some(spec) = &file {
@@ -977,9 +977,104 @@ fn anchor_matches(anchor: &Anchor, path: &str, lines: Option<LineRange>) -> bool
         })
 }
 
-/// The commits making up `base..head` — the set one of a thread's anchored
-/// heads must fall in to belong to that change. An empty diff is just its own
-/// commit.
+/// Whether an anchored head belongs to `base..head`. Identity first; when
+/// the commit isn't one of the range's, a patch-id twin counts instead:
+/// `git patch-id --stable` is unchanged by a rebase, a rebased merge, or a
+/// one-commit squash, and retention (SPEC.md §5.2) keeps the original
+/// commit readable, so the same diff re-committed under a new SHA is found
+/// even by a reader who never saw the rewrite. Merge commits (no usable
+/// patch) and unreadable commits simply never twin-match. Patch-ids are
+/// computed lazily: a listing where nothing was rewritten never pays for
+/// them.
+struct ChangeMembership<'a> {
+    dir: &'a Path,
+    base: ObjectId,
+    head: ObjectId,
+    commits: std::collections::HashSet<String>,
+    /// Patch-ids of the range's own commits, filled on first identity miss.
+    twins: Option<std::collections::HashSet<String>>,
+    /// Twin verdicts for heads that missed on identity.
+    checked: std::collections::HashMap<String, bool>,
+}
+
+impl<'a> ChangeMembership<'a> {
+    fn new(repo: &'a gix::Repository, base: ObjectId, head: ObjectId) -> Result<Self> {
+        Ok(Self {
+            dir: repo.git_dir(),
+            base,
+            head,
+            commits: range_commits(repo, base, head)?,
+            twins: None,
+            checked: Default::default(),
+        })
+    }
+
+    fn contains(&mut self, head: &str) -> bool {
+        if self.commits.contains(head) {
+            return true;
+        }
+        if let Some(&hit) = self.checked.get(head) {
+            return hit;
+        }
+        let hit = patch_ids(self.dir, &["log", "-1", "-p", head])
+            .ok()
+            .and_then(|ids| ids.into_iter().next())
+            .is_some_and(|(id, _)| self.twins().contains(&id));
+        self.checked.insert(head.to_string(), hit);
+        hit
+    }
+
+    fn twins(&mut self) -> &std::collections::HashSet<String> {
+        if self.twins.is_none() {
+            let head = self.head.to_string();
+            let range = format!("{}..{}", self.base, self.head);
+            // Same commit set as range_commits: an empty diff is its own commit.
+            let args: Vec<&str> = if self.base == self.head {
+                vec!["log", "-1", "-p", &head]
+            } else {
+                vec!["log", "-p", &range]
+            };
+            let ids = patch_ids(self.dir, &args).unwrap_or_default();
+            self.twins = Some(ids.into_iter().map(|(id, _)| id).collect());
+        }
+        self.twins.as_ref().expect("just filled")
+    }
+}
+
+/// `git patch-id --stable` over `git log <args>`: (patch-id, commit) pairs,
+/// one per commit that has a patch. The two processes share a real pipe —
+/// nothing is buffered here, so a range of any size streams.
+fn patch_ids(dir: &Path, log_args: &[&str]) -> Result<Vec<(String, String)>> {
+    let mut log = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(log_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to run git log")?;
+    let ids = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["patch-id", "--stable"])
+        .stdin(Stdio::from(log.stdout.take().expect("stdout is piped")))
+        .stderr(Stdio::null())
+        .output()
+        .context("failed to run git patch-id")?;
+    if !log.wait()?.success() || !ids.status.success() {
+        bail!("git log -p | git patch-id failed for {log_args:?}");
+    }
+    Ok(String::from_utf8_lossy(&ids.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (id, commit) = line.split_once(' ')?;
+            Some((id.to_string(), commit.to_string()))
+        })
+        .collect())
+}
+
+/// The commits making up `base..head` — [`ChangeMembership`]'s identity
+/// layer. An empty diff is just its own commit.
 fn range_commits(
     repo: &gix::Repository,
     base: ObjectId,

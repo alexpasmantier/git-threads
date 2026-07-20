@@ -366,6 +366,54 @@ fn list_filters_by_change_and_open_state() {
 }
 
 #[test]
+fn list_range_membership_survives_a_rebase() {
+    let dir = setup_repo();
+    let path = dir.path();
+
+    // A topic branch with one change; the thread anchors to its tip.
+    git(path, &["checkout", "-q", "-b", "topic"]);
+    fs::write(path.join("topic.txt"), "topic\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "topic work"]);
+    let store = Store::open(path).unwrap();
+    commands::comment(&store, &opts("survives the rebase")).unwrap();
+
+    // main moves on (in a different file) and topic rebases onto it:
+    // the same diff, re-committed under a new SHA.
+    git(path, &["checkout", "-q", "main"]);
+    fs::write(path.join("elsewhere.txt"), "main\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "main moves"]);
+    git(path, &["checkout", "-q", "topic"]);
+    let rev = |spec: &str| {
+        let out =
+            Command::new("git").arg("-C").arg(path).args(["rev-parse", spec]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let old_tip = rev("HEAD");
+    git(path, &["rebase", "-q", "main"]);
+    assert_ne!(old_tip, rev("HEAD"), "the rebase must rewrite the tip");
+
+    let list = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .arg("list")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // Identity misses — the anchored commit is gone from the range — and
+    // the patch-id twin catches.
+    let on_topic = list(&["main..topic"]);
+    assert!(on_topic.contains("survives the rebase"), "{on_topic}");
+    // Twins don't leak into ranges whose diffs are different.
+    let on_main = list(&["main~1..main"]);
+    assert!(!on_main.contains("survives the rebase"), "{on_main}");
+}
+
+#[test]
 fn list_grep_searches_folded_bodies() {
     let dir = setup_repo();
     let path = dir.path();

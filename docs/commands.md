@@ -210,7 +210,12 @@ A thread belongs to a change when its anchored head commit is one of the range's
 per-commit comments on any commit of a branch, whole-diff comments on its tip, snapshot
 notes at those commits. A [re-pinned](#git-threads-move) thread counts under both addresses
 — where it was discussed and where it was moved to — so moving a thread onto a branch
-brings it into that branch's listing. `--open` / `--resolved` keep only that state, so the
+brings it into that branch's listing. History rewrites don't break the link: when the
+anchored commit itself is no longer in the range, a commit carrying the same patch-id
+(`git patch-id --stable`) counts as it — a rebase, a rebased merge, or a one-commit squash
+re-commits the same diff under a new SHA, and the thread follows. What a rewrite genuinely
+changed — conflict resolutions, multi-commit squashes — is [`move`](#git-threads-move)'s
+to catch up with. `--open` / `--resolved` keep only that state, so the
 review question is one line:
 
 ```console
