@@ -12,7 +12,7 @@ Every `git threads` command, with its options and behavior. For the concepts beh
 | [`reply`](#git-threads-reply) | replies to a thread, or to a specific message in one |
 | [`edit`](#git-threads-edit) | replaces the text of one of your messages (appends an edit event) |
 | [`delete`](#git-threads-delete) | retracts one of your messages (appends a tombstone) |
-| [`move`](#git-threads-move) | re-pins a thread to where its code lives now |
+| [`move`](#git-threads-move) | re-pins a thread to where its code lives now (`--orphans`: every thread a rewrite stranded) |
 | [`resolve`](#git-threads-resolve) | resolves a thread (`--reopen` to reopen) |
 | [`discard`](#git-threads-discard) | removes a drafted event before it's shared (`--all` for every draft) |
 | [`list`](#git-threads-list) | all threads — or one change's — with their re-anchor status against your current code |
@@ -151,6 +151,7 @@ over any edit, regardless of timestamps. Same-author rule as `edit`.
 
 ```
 git threads move <thread-or-message> <file[:lines]> [--at <commit>]
+git threads move --orphans [--at <commit>]
 ```
 
 Re-pins a thread to where its code lives now — the way out of `outdated`. When the
@@ -168,6 +169,25 @@ new paths in `list`.
 $ git threads show a023381                  # (open, outdated) — the algorithm gave up
 $ git threads move a023381 src/lib/list.rs:210-215
 drafted move of thread a023381188062 to src/lib/list.rs:210-215 (commit and push to share)
+```
+
+`--orphans` is the bulk form, for after a squash-merge or a conflict-resolving rebase —
+the rewrites whose commits [`list`](#git-threads-list)'s patch-id matching can't follow. It
+finds threads both of whose addresses left `--at`'s history with no patch-id twin on it,
+and re-pins the ones whose code re-anchoring finds verbatim there (`exact` or `relocated`)
+— content decides, never a guess at what happened to the commit. Everything else is
+reported and left alone: fuzzy and outdated threads (re-pinning those is a judgment call —
+one `move` each), and whole-change threads (commit anchors never re-anchor). Threads that
+merely live elsewhere — an in-flight branch, an unmerged import — fail the content test
+and stay put. Each re-pin is an ordinary drafted move: review with `status`, drop with
+`discard`, share with `commit` and `push` — and one person's push fixes the listing for
+every clone.
+
+```console
+$ git threads move --orphans --at main      # after the PR was squash-merged
+drafted move of thread 5647010a3cf3 to src/parser.rs:120-128 (relocated)
+left in place — whole-change threads never re-anchor: 0b9da2ad054d
+(commit and push to share)
 ```
 
 ### `git threads resolve`

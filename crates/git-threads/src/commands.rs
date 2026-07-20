@@ -7,7 +7,7 @@ use crate::view::{
 use anyhow::{Context, Result, anyhow, bail};
 use git_threads_core::{
     Anchor, AnchorKind, Author, DiffRef, Event, EventId, EventKind, FoldedEvent, FoldedThread,
-    GitOid, LineRange, Side, ThreadId, Timestamp, fold_thread,
+    GitOid, LineRange, ReanchorStatus, Side, ThreadId, Timestamp, fold_thread,
 };
 use gix::ObjectId;
 use std::collections::BTreeSet;
@@ -544,6 +544,24 @@ pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Re
             Ok(range)
         })
         .transpose()?;
+    let event = move_event(repo, target, path, lines, blob_id)?;
+    let event_id = event.id()?;
+    store.draft(&Batch {
+        new_threads: vec![],
+        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
+    })?;
+    Ok(MoveDraft { thread: thread.id, event: event_id, path: path.to_string(), lines })
+}
+
+/// The move event itself: an empty-diff anchor pinned at `target` — a
+/// statement of where the code is, not of a change (SPEC.md §2.1).
+fn move_event(
+    repo: &gix::Repository,
+    target: ObjectId,
+    path: &str,
+    lines: Option<LineRange>,
+    blob: ObjectId,
+) -> Result<Event> {
     let pin = GitOid::from_hex(target.to_string())?;
     let anchor = Anchor {
         v: 1,
@@ -553,19 +571,103 @@ pub fn move_thread(store: &Store, prefix: &str, file_spec: &str, at: &str) -> Re
         old_path: None,
         side: Some(Side::New),
         lines,
-        blob: Some(GitOid::from_hex(blob_id.to_string())?),
+        blob: Some(GitOid::from_hex(blob.to_string())?),
         cols: None,
         extra: Default::default(),
     };
-    let event = new_event(repo, EventKind::Move, |e| {
+    new_event(repo, EventKind::Move, |e| {
         e.anchor = Some(anchor);
-    })?;
-    let event_id = event.id()?;
-    store.draft(&Batch {
-        new_threads: vec![],
-        appends: vec![Append { thread: thread.id.clone(), events: vec![event] }],
-    })?;
-    Ok(MoveDraft { thread: thread.id, event: event_id, path: path.to_string(), lines })
+    })
+}
+
+/// Bulk `move --orphans`: re-pin every actionable orphan at `at`. A thread
+/// is orphaned when a rewrite left both its addresses — where it was
+/// discussed and where it was last moved — outside `at`'s history with no
+/// patch-id twin on it (a twinned thread is already findable; an event
+/// would be noise). Actionable means re-anchoring finds its code at `at`
+/// verbatim (`exact`/`relocated`): content decides, never a reconstruction
+/// of what happened to the commit. Fuzzy and outdated threads are reported
+/// untouched — re-pinning those is a judgment call, one `move` per thread.
+/// So are orphaned whole-change threads: commit anchors never re-anchor,
+/// so a patch-id twin is their only rescue.
+pub fn move_orphans(store: &Store, at: &str) -> Result<OrphanMoves> {
+    let repo = store.repo();
+    let target = resolve_commit(repo, at)?;
+    // One verdict per distinct commit: threads share anchored heads.
+    let mut verdicts: std::collections::HashMap<String, bool> = Default::default();
+    let mut findable_at_target = |head: &str| -> Result<bool> {
+        if let Some(&verdict) = verdicts.get(head) {
+            return Ok(verdict);
+        }
+        let verdict = is_ancestor(repo.git_dir(), head, target)? || {
+            let commit = ObjectId::from_hex(head.as_bytes())?;
+            ChangeMembership::new(repo, commit, target)?.contains(head)
+        };
+        verdicts.insert(head.to_string(), verdict);
+        Ok(verdict)
+    };
+    let mut cache = reanchor::Cache::open(repo, target);
+    let mut moved = Vec::new();
+    let mut appends = Vec::new();
+    let mut unplaced = Vec::new();
+    let mut whole_commit = Vec::new();
+    for thread in store.threads()? {
+        let folded = fold_thread(thread.events.clone());
+        let anchor = effective_anchor(&thread, &folded).clone();
+        if findable_at_target(thread.anchor.diff.head.as_str())?
+            || (anchor.diff.head != thread.anchor.diff.head
+                && findable_at_target(anchor.diff.head.as_str())?)
+        {
+            continue;
+        }
+        match cache.placement(store, &anchor)? {
+            Reanchor::WholeCommit => whole_commit.push(thread.id),
+            Reanchor::Located { path, lines, status }
+                if matches!(status, ReanchorStatus::Exact | ReanchorStatus::Relocated) =>
+            {
+                let (blob, _) = blob_at(repo, target, &path)?
+                    .with_context(|| format!("{path:?} vanished from the target"))?;
+                let event = move_event(repo, target, &path, lines, blob)?;
+                let event_id = event.id()?;
+                appends.push(Append { thread: thread.id.clone(), events: vec![event] });
+                moved
+                    .push((MoveDraft { thread: thread.id, event: event_id, path, lines }, status));
+            }
+            _ => unplaced.push(thread.id),
+        }
+    }
+    if !appends.is_empty() {
+        store.draft(&Batch { new_threads: vec![], appends })?;
+    }
+    cache.save();
+    Ok(OrphanMoves { target, moved, unplaced, whole_commit })
+}
+
+/// The outcome of `move --orphans`: what was re-pinned, and what stayed
+/// put and why.
+pub struct OrphanMoves {
+    pub target: ObjectId,
+    pub moved: Vec<(MoveDraft, ReanchorStatus)>,
+    /// Orphaned, but no verbatim match at the target.
+    pub unplaced: Vec<ThreadId>,
+    /// Orphaned whole-change threads: commit anchors never re-anchor.
+    pub whole_commit: Vec<ThreadId>,
+}
+
+/// `git merge-base --is-ancestor`: whether `commit` is in `tip`'s history.
+fn is_ancestor(dir: &Path, commit: &str, tip: ObjectId) -> Result<bool> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["merge-base", "--is-ancestor", commit, &tip.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to run git merge-base")?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!("git merge-base --is-ancestor failed for {commit}"),
+    }
 }
 
 /// A drafted move: the thread re-pinned and where to.

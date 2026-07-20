@@ -414,6 +414,70 @@ fn list_range_membership_survives_a_rebase() {
 }
 
 #[test]
+fn move_orphans_re_pins_after_a_squash_merge() {
+    let dir = setup_repo();
+    let path = dir.path();
+
+    // Two topic commits touching the same lines: the squash merges their
+    // diffs, so neither commit's patch-id survives — the case the twin
+    // layer can't rescue.
+    git(path, &["checkout", "-q", "-b", "topic"]);
+    fs::write(path.join("src/lib.rs"), "fn a() {}\nfn b() {}\nfn c() {}\nfn one() {}\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "add one"]);
+    fs::write(
+        path.join("src/lib.rs"),
+        "fn a() {}\nfn b() {}\nfn c() {}\nfn one() {}\nfn two() {}\n",
+    )
+    .unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "add two"]);
+    let store = Store::open(path).unwrap();
+    let mut on_one = opts("does one need a doc comment?");
+    on_one.target = Some("HEAD~1".into());
+    on_one.file = Some("src/lib.rs:4".into());
+    commands::comment(&store, &on_one).unwrap();
+
+    // A never-merged side branch: its thread is off main too, but its code
+    // isn't there — off-target is not orphaned.
+    git(path, &["checkout", "-q", "-b", "side", "main"]);
+    fs::write(path.join("side.txt"), "side\n").unwrap();
+    git(path, &["add", "."]);
+    git(path, &["commit", "-q", "-m", "side work"]);
+    let mut on_side = opts("side note");
+    on_side.file = Some("side.txt:1".into());
+    commands::comment(&store, &on_side).unwrap();
+
+    git(path, &["checkout", "-q", "main"]);
+    git(path, &["merge", "-q", "--squash", "topic"]);
+    git(path, &["commit", "-q", "-m", "squashed topic"]);
+
+    let list = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .arg("list")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // Neither identity nor a patch-id twin finds the squashed thread...
+    let before = list(&["main~1..main"]);
+    assert!(!before.contains("doc comment"), "{before}");
+
+    let sweep = commands::move_orphans(&store, "main").unwrap();
+    assert_eq!(sweep.moved.len(), 1, "the squashed thread re-pins");
+    assert_eq!(sweep.unplaced.len(), 1, "the side thread stays put");
+
+    // ...and afterwards the drafted move does.
+    let after = list(&["main~1..main"]);
+    assert!(after.contains("doc comment"), "{after}");
+    // A second sweep drafts nothing: the move made the thread findable.
+    assert!(commands::move_orphans(&store, "main").unwrap().moved.is_empty());
+}
+
+#[test]
 fn list_grep_searches_folded_bodies() {
     let dir = setup_repo();
     let path = dir.path();

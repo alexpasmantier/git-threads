@@ -70,12 +70,17 @@ enum Command {
     /// Re-pin a thread to where its code lives now (for outdated threads)
     Move {
         /// Thread ID or the ID of any message in it (or a unique prefix)
-        thread: String,
+        #[arg(required_unless_present = "orphans")]
+        thread: Option<String>,
         /// New location: a file at the pin commit, optionally with lines (src/lib.rs:120-128)
-        file: String,
+        #[arg(required_unless_present = "orphans")]
+        file: Option<String>,
         /// Commit to pin at
         #[arg(long, default_value = "HEAD")]
         at: String,
+        /// Re-pin every orphaned thread whose code is found verbatim at --at
+        #[arg(long, conflicts_with_all = ["thread", "file"])]
+        orphans: bool,
     },
     /// Mark a thread resolved
     Resolve {
@@ -322,16 +327,49 @@ fn main() -> anyhow::Result<()> {
             println!("drafted retraction of {}", ui.yellow(short(&amendment.target)));
             Ok(())
         }
-        Command::Move { thread, file, at } => {
-            let moved = commands::move_thread(&store, &thread, &file, &at)?;
-            let location = match moved.lines {
-                Some(l) => format!("{}:{}-{}", moved.path, l.start, l.end),
-                None => moved.path,
+        Command::Move { thread, file, at, orphans } => {
+            let location = |path: &str, lines: Option<git_threads_core::LineRange>| match lines {
+                Some(l) => format!("{path}:{}-{}", l.start, l.end),
+                None => path.to_string(),
             };
+            if orphans {
+                let sweep = commands::move_orphans(&store, &at)?;
+                let at_short = &sweep.target.to_string()[..12];
+                for (draft, status) in &sweep.moved {
+                    let status = match status {
+                        git_threads_core::ReanchorStatus::Exact => "exact",
+                        git_threads_core::ReanchorStatus::Relocated => "relocated",
+                        git_threads_core::ReanchorStatus::Fuzzy(f) => &format!("fuzzy({f})"),
+                    };
+                    println!(
+                        "drafted move of thread {} to {} {}",
+                        ui.yellow(short(&draft.thread)),
+                        ui.bold(location(&draft.path, draft.lines)),
+                        ui.dim(format!("({status})"))
+                    );
+                }
+                let stayed = |ids: &[git_threads_core::ThreadId], why: &str| {
+                    if !ids.is_empty() {
+                        let ids: Vec<&str> = ids.iter().map(|id| short(id)).collect();
+                        println!("left in place — {why}: {}", ids.join(", "));
+                    }
+                };
+                stayed(&sweep.unplaced, &format!("no verbatim match at {at_short}"));
+                stayed(&sweep.whole_commit, "whole-change threads never re-anchor");
+                if sweep.moved.is_empty() && sweep.unplaced.is_empty() && sweep.whole_commit.is_empty()
+                {
+                    println!("no orphaned threads at {}", ui.bold(at_short));
+                } else if !sweep.moved.is_empty() {
+                    println!("{}", ui.dim("(commit and push to share)"));
+                }
+                return Ok(());
+            }
+            let (thread, file) = (thread.expect("required"), file.expect("required"));
+            let moved = commands::move_thread(&store, &thread, &file, &at)?;
             println!(
                 "drafted move of thread {} to {} {}",
                 ui.yellow(short(&moved.thread)),
-                ui.bold(location),
+                ui.bold(location(&moved.path, moved.lines)),
                 ui.dim("(commit and push to share)")
             );
             Ok(())
