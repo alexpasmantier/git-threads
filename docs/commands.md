@@ -220,8 +220,8 @@ Both reading commands page like `git log`: the pager is resolved the way git res
 
 ```
 git threads list [TARGET] [FILE] [--at <commit>] [--open | --resolved] [--new] [--oneline]
-                 [-p | --stat | --json] [-n <num>] [--author <who>] [--grep <text>]
-                 [--since <date>] [--until <date>]
+                 [-p | --stat | --json] [-n <num>] [--pr <number>] [--author <who>]
+                 [--grep <text>] [--since <date>] [--until <date>]
 ```
 
 All threads, or a filtered view. The positional grammar mirrors `comment`: `TARGET` names a
@@ -290,6 +290,15 @@ retracted messages don't match). That makes the knowledge base retrievable:
 
 ```console
 $ git threads list --grep "sigpipe"          # where did we discuss that?
+```
+
+`--pr <number>` (or `--mr`) keeps threads imported from that pull/merge request, matched
+against the origin URLs the importer records — an exact path segment, so `--pr 1` never
+matches PR 11. Where the other filters ask where code lives, this one asks where a
+discussion came from, which no rewrite or branch deletion can change:
+
+```console
+$ git threads list --pr 123 --open           # what that PR left unresolved
 ```
 
 `--json` swaps the rendered blocks for one JSON array — the interface for anything that
@@ -363,7 +372,9 @@ Where you are in that cycle, the way `git status` answers it for the working tre
 drafted event (kind, ID, where it goes, the first line of what it says), per remote how
 many sealed events haven't been pushed, and how many threads have activity you haven't
 seen (`git threads list --new` shows them). All clean prints
-`nothing drafted` / `up to date with origin`.
+`nothing drafted` / `up to date with origin`. When a rewrite stranded threads whose code
+sits verbatim at your checkout, a last line counts them and names the way out
+([`move --orphans`](#git-threads-move)).
 
 ```console
 $ git threads status

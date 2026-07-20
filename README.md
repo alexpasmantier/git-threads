@@ -51,7 +51,10 @@ Experimental. The format and CLI cover the core loop — comment, reply, edit, d
 move, discard, show, list (with `--grep` search and `--json` output), status, a local inbox
 (`list --new`), the git-shaped pull/commit/push cycle with drafts, session batching,
 and re-anchoring, plus a GitHub importer that liberates PR review history into the
-repository — but the spec is a draft and may still change.
+repository. Threads survive rebases and squash-merges: listings match rewritten commits
+by patch-id, `move --orphans` re-pins what that can't reach, and `list --pr` finds an
+imported PR's history no matter what happened to its branch. The spec is a draft and may
+still change.
 This repository dogfoods itself: its own review threads live on its `refs/threads/data`.
 
 ## Try it

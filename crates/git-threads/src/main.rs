@@ -178,6 +178,9 @@ enum Command {
         /// Limit the number of threads shown
         #[arg(short = 'n', long = "max-count", value_name = "NUMBER")]
         max_count: Option<usize>,
+        /// Only threads imported from this pull/merge request (--mr works too)
+        #[arg(long, alias = "mr", value_name = "NUMBER")]
+        pr: Option<u64>,
         /// Only threads whose root author matches (substring of name or email)
         #[arg(long)]
         author: Option<String>,
@@ -531,6 +534,7 @@ fn main() -> anyhow::Result<()> {
             stat,
             json,
             max_count,
+            pr,
             author,
             grep,
             since,
@@ -550,6 +554,7 @@ fn main() -> anyhow::Result<()> {
                     resolved: state,
                     new,
                     max_count,
+                    pr,
                     author,
                     grep,
                     since,

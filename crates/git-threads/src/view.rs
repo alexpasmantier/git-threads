@@ -64,12 +64,14 @@ pub struct MessageView {
 }
 
 /// What `status` reports: drafts awaiting `commit`, sealed events not yet on
-/// each remote (awaiting `push`), and threads with unseen activity.
+/// each remote (awaiting `push`), threads with unseen activity, and threads
+/// a rewrite stranded that `move --orphans` could re-pin at the checkout.
 #[derive(Clone, Debug, Serialize)]
 pub struct StatusView {
     pub drafted: Vec<ThreadDrafts>,
     pub remotes: Vec<RemoteStatus>,
     pub threads_with_news: usize,
+    pub repins: usize,
 }
 
 impl StatusView {

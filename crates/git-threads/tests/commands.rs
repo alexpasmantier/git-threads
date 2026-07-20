@@ -465,6 +465,8 @@ fn move_orphans_re_pins_after_a_squash_merge() {
     // Neither identity nor a patch-id twin finds the squashed thread...
     let before = list(&["main~1..main"]);
     assert!(!before.contains("doc comment"), "{before}");
+    // ...and status counts it as re-pinnable at the checkout.
+    assert_eq!(commands::status(&store).unwrap().repins, 1);
 
     let sweep = commands::move_orphans(&store, "main").unwrap();
     assert_eq!(sweep.moved.len(), 1, "the squashed thread re-pins");
@@ -473,8 +475,9 @@ fn move_orphans_re_pins_after_a_squash_merge() {
     // ...and afterwards the drafted move does.
     let after = list(&["main~1..main"]);
     assert!(after.contains("doc comment"), "{after}");
-    // A second sweep drafts nothing: the move made the thread findable.
+    // A second sweep drafts nothing, and the hint is gone.
     assert!(commands::move_orphans(&store, "main").unwrap().moved.is_empty());
+    assert_eq!(commands::status(&store).unwrap().repins, 0);
 }
 
 #[test]

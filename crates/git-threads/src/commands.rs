@@ -580,19 +580,33 @@ fn move_event(
     })
 }
 
-/// Bulk `move --orphans`: re-pin every actionable orphan at `at`. A thread
-/// is orphaned when a rewrite left both its addresses — where it was
-/// discussed and where it was last moved — outside `at`'s history with no
-/// patch-id twin on it (a twinned thread is already findable; an event
-/// would be noise). Actionable means re-anchoring finds its code at `at`
-/// verbatim (`exact`/`relocated`): content decides, never a reconstruction
-/// of what happened to the commit. Fuzzy and outdated threads are reported
-/// untouched — re-pinning those is a judgment call, one `move` per thread.
-/// So are orphaned whole-change threads: commit anchors never re-anchor,
-/// so a patch-id twin is their only rescue.
-pub fn move_orphans(store: &Store, at: &str) -> Result<OrphanMoves> {
+/// One actionable orphan: where re-anchoring found its code, verbatim.
+struct Repin {
+    thread: ThreadId,
+    path: String,
+    lines: Option<LineRange>,
+    status: ReanchorStatus,
+}
+
+/// What a sweep of the store found at `target`.
+struct OrphanScan {
+    repins: Vec<Repin>,
+    unplaced: Vec<ThreadId>,
+    whole_commit: Vec<ThreadId>,
+}
+
+/// The scan behind `move --orphans` and status's re-pin hint. A thread is
+/// orphaned when a rewrite left both its addresses — where it was
+/// discussed and where it was last moved — outside `target`'s history with
+/// no patch-id twin on it (a twinned thread is already findable; an event
+/// would be noise). Actionable means re-anchoring finds its code at
+/// `target` verbatim (`exact`/`relocated`): content decides, never a
+/// reconstruction of what happened to the commit. Fuzzy and outdated
+/// threads land in `unplaced` — re-pinning those is a judgment call, one
+/// `move` per thread. Orphaned whole-change threads are counted apart:
+/// commit anchors never re-anchor, so a patch-id twin is their only rescue.
+fn scan_orphans(store: &Store, target: ObjectId) -> Result<OrphanScan> {
     let repo = store.repo();
-    let target = resolve_commit(repo, at)?;
     // One verdict per distinct commit: threads share anchored heads.
     let mut verdicts: std::collections::HashMap<String, bool> = Default::default();
     let mut findable_at_target = |head: &str| -> Result<bool> {
@@ -607,10 +621,7 @@ pub fn move_orphans(store: &Store, at: &str) -> Result<OrphanMoves> {
         Ok(verdict)
     };
     let mut cache = reanchor::Cache::open(repo, target);
-    let mut moved = Vec::new();
-    let mut appends = Vec::new();
-    let mut unplaced = Vec::new();
-    let mut whole_commit = Vec::new();
+    let mut scan = OrphanScan { repins: vec![], unplaced: vec![], whole_commit: vec![] };
     for thread in store.threads()? {
         let folded = fold_thread(thread.events.clone());
         let anchor = effective_anchor(&thread, &folded).clone();
@@ -621,26 +632,41 @@ pub fn move_orphans(store: &Store, at: &str) -> Result<OrphanMoves> {
             continue;
         }
         match cache.placement(store, &anchor)? {
-            Reanchor::WholeCommit => whole_commit.push(thread.id),
+            Reanchor::WholeCommit => scan.whole_commit.push(thread.id),
             Reanchor::Located { path, lines, status }
                 if matches!(status, ReanchorStatus::Exact | ReanchorStatus::Relocated) =>
             {
-                let (blob, _) = blob_at(repo, target, &path)?
-                    .with_context(|| format!("{path:?} vanished from the target"))?;
-                let event = move_event(repo, target, &path, lines, blob)?;
-                let event_id = event.id()?;
-                appends.push(Append { thread: thread.id.clone(), events: vec![event] });
-                moved
-                    .push((MoveDraft { thread: thread.id, event: event_id, path, lines }, status));
+                scan.repins.push(Repin { thread: thread.id, path, lines, status });
             }
-            _ => unplaced.push(thread.id),
+            _ => scan.unplaced.push(thread.id),
         }
+    }
+    cache.save();
+    Ok(scan)
+}
+
+/// Bulk `move --orphans`: draft a move for every actionable orphan at `at`
+/// (the [`scan_orphans`] verdicts), leaving the rest reported untouched.
+pub fn move_orphans(store: &Store, at: &str) -> Result<OrphanMoves> {
+    let repo = store.repo();
+    let target = resolve_commit(repo, at)?;
+    let scan = scan_orphans(store, target)?;
+    let mut moved = Vec::new();
+    let mut appends = Vec::new();
+    for repin in scan.repins {
+        let (blob, _) = blob_at(repo, target, &repin.path)?
+            .with_context(|| format!("{:?} vanished from the target", repin.path))?;
+        let event = move_event(repo, target, &repin.path, repin.lines, blob)?;
+        let event_id = event.id()?;
+        appends.push(Append { thread: repin.thread.clone(), events: vec![event] });
+        let draft =
+            MoveDraft { thread: repin.thread, event: event_id, path: repin.path, lines: repin.lines };
+        moved.push((draft, repin.status));
     }
     if !appends.is_empty() {
         store.draft(&Batch { new_threads: vec![], appends })?;
     }
-    cache.save();
-    Ok(OrphanMoves { target, moved, unplaced, whole_commit })
+    Ok(OrphanMoves { target, moved, unplaced: scan.unplaced, whole_commit: scan.whole_commit })
 }
 
 /// The outcome of `move --orphans`: what was re-pinned, and what stayed
@@ -706,6 +732,8 @@ pub struct ListOpts {
     pub new: bool,
     /// git log's -n: stop after this many threads.
     pub max_count: Option<usize>,
+    /// Only threads imported from this pull/merge request number.
+    pub pr: Option<u64>,
     /// Substring of the root author's name or email, case-insensitive.
     pub author: Option<String>,
     /// Substring of any message's current text, case-insensitive.
@@ -741,6 +769,10 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
             let here = |a: &Anchor| anchor_matches(a, path, lines);
             here(&t.anchor) || moved_anchor(t).as_ref().is_some_and(here)
         });
+    }
+    if let Some(number) = opts.pr {
+        let number = number.to_string();
+        threads.retain(|t| t.events.iter().any(|(_, e)| origin_pr(e, &number)));
     }
     let at_commit = resolve_commit(repo, &opts.at)?;
     let since = opts.since.as_deref().map(parse_date).transpose()?;
@@ -1057,6 +1089,23 @@ fn resolve_list_filters(
     }
 }
 
+/// Whether an imported event's origin URL points into PR/MR `number`: a
+/// `/pull/<n>` or `/merge_requests/<n>` path segment pair. Native threads
+/// carry no origin and never match.
+fn origin_pr(event: &Event, number: &str) -> bool {
+    let Some(url) = event
+        .extra
+        .get("origin")
+        .and_then(|origin| origin.get("url"))
+        .and_then(|url| url.as_str())
+    else {
+        return false;
+    };
+    let path = url.split(['#', '?']).next().unwrap_or(url);
+    let segments: Vec<&str> = path.split('/').collect();
+    segments.windows(2).any(|w| matches!(w[0], "pull" | "merge_requests") && w[1] == number)
+}
+
 /// Where a thread was re-pinned to, if it ever was (SPEC.md §2.4 rule 5).
 /// A moved thread is findable by both addresses: where it was discussed
 /// (its immutable anchor) and where it lives now.
@@ -1279,7 +1328,13 @@ pub fn status(store: &Store) -> Result<StatusView> {
     let seen = store.seen_event_ids()?;
     let me = identity(store.repo()).ok();
     let threads_with_news = news_count(&threads, &seen, me.as_ref());
-    Ok(StatusView { drafted, remotes, threads_with_news })
+    // The re-pin hint: actionable orphans at the checkout — the same scan
+    // `move --orphans` acts on. An unborn HEAD just means no hint.
+    let repins = match resolve_commit(store.repo(), "HEAD") {
+        Ok(target) => scan_orphans(store, target)?.repins.len(),
+        Err(_) => 0,
+    };
+    Ok(StatusView { drafted, remotes, threads_with_news, repins })
 }
 
 /// Fetch the remote's threads data into the tracking ref and integrate it

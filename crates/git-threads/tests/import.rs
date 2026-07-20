@@ -193,3 +193,31 @@ fn file_level_comment_maps_to_a_file_anchor() {
     assert!(anchor.lines.is_none());
     assert!(anchor.blob.is_some());
 }
+
+#[test]
+fn list_pr_filters_by_origin_url() {
+    let (dir, base, head) = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    let thread = line_thread(
+        &head,
+        vec![comment("C_1", "from the PR", "2026-01-01T10:00:00Z", &head, None)],
+    );
+    import::apply(&store, &base, &[thread]).unwrap();
+
+    let list = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(dir.path())
+            .arg("list")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // The fixture's origin URLs point into pull/1; the segment must match
+    // exactly, and --mr is the same flag.
+    let hit = list(&["--pr", "1"]);
+    assert!(hit.contains("from the PR"), "{hit}");
+    assert_eq!(list(&["--pr", "11"]).trim(), "no threads");
+    assert!(list(&["--mr", "1"]).contains("from the PR"));
+}

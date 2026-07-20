@@ -307,6 +307,17 @@ pub fn status(ui: Ui, view: &StatusView) -> String {
         )
         .unwrap();
     }
+
+    if view.repins > 0 {
+        writeln!(
+            out,
+            "{} thread{} stranded by a rewrite can re-pin here {}",
+            view.repins,
+            if view.repins == 1 { "" } else { "s" },
+            ui.dim("(git threads move --orphans)")
+        )
+        .unwrap();
+    }
     out
 }
 
