@@ -208,8 +208,10 @@ All threads, or a filtered view. The positional grammar mirrors `comment`: `TARG
 change (a commit, or a range like `main..topic` / `main...topic`), `FILE` a path within it.
 A thread belongs to a change when its anchored head commit is one of the range's commits:
 per-commit comments on any commit of a branch, whole-diff comments on its tip, snapshot
-notes at those commits. `--open` / `--resolved` keep only that state, so the review
-question is one line:
+notes at those commits. A [re-pinned](#git-threads-move) thread counts under both addresses
+— where it was discussed and where it was moved to — so moving a thread onto a branch
+brings it into that branch's listing. `--open` / `--resolved` keep only that state, so the
+review question is one line:
 
 ```console
 $ git threads list main...topic --open      # what still needs attention on this branch?

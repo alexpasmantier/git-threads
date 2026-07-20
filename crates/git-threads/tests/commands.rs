@@ -344,6 +344,16 @@ fn list_filters_by_change_and_open_state() {
     let composed = list(&["HEAD~1..HEAD", "src/lib.rs"]);
     assert!(composed.contains("on the file") && !composed.contains("on the tip"), "{composed}");
 
+    // A move re-pins a thread onto another change, and the range filter
+    // follows it there — the same both-addresses rule the path filter uses.
+    let mut on_old = opts("re-pinned onto the tip");
+    on_old.target = Some("HEAD~1".into());
+    on_old.file = Some("src/lib.rs:2".into());
+    let moved = commands::comment(&store, &on_old).unwrap();
+    assert!(!list(&["HEAD~1..HEAD"]).contains("re-pinned"));
+    commands::move_thread(&store, moved.as_str(), "src/lib.rs:4", "HEAD").unwrap();
+    assert!(list(&["HEAD~1..HEAD"]).contains("re-pinned"));
+
     // A spec that is neither a commit nor a known path is an error, not an
     // empty listing.
     let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))

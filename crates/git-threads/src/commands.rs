@@ -627,20 +627,17 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
     if let Some(spec) = &target {
         let (base, head) = resolve_diff(repo, spec)?;
         let commits = range_commits(repo, base, head)?;
-        threads.retain(|t| commits.contains(t.anchor.diff.head.as_str()));
+        threads.retain(|t| {
+            let on_range = |a: &Anchor| commits.contains(a.diff.head.as_str());
+            on_range(&t.anchor) || moved_anchor(t).as_ref().is_some_and(on_range)
+        });
     }
     if let Some(spec) = &file {
         let (path, lines) = split_line_suffix(spec);
         let lines = lines.map(parse_lines).transpose()?;
-        // A moved thread is findable by both addresses: where it was
-        // discussed (its anchor) and where it lives now (its move).
         threads.retain(|t| {
-            anchor_matches(&t.anchor, path, lines)
-                || fold_thread(t.events.clone())
-                    .moved
-                    .as_ref()
-                    .and_then(|(_, e)| e.anchor.as_ref())
-                    .is_some_and(|a| anchor_matches(a, path, lines))
+            let here = |a: &Anchor| anchor_matches(a, path, lines);
+            here(&t.anchor) || moved_anchor(t).as_ref().is_some_and(here)
         });
     }
     let at_commit = resolve_commit(repo, &opts.at)?;
@@ -958,6 +955,13 @@ fn resolve_list_filters(
     }
 }
 
+/// Where a thread was re-pinned to, if it ever was (SPEC.md §2.4 rule 5).
+/// A moved thread is findable by both addresses: where it was discussed
+/// (its immutable anchor) and where it lives now.
+fn moved_anchor(thread: &ThreadRecord) -> Option<Anchor> {
+    fold_thread(thread.events.clone()).moved.and_then(|(_, e)| e.anchor)
+}
+
 /// Whether a thread's anchor is on `path` (the file itself, or under it as a
 /// directory) and, when a line range is given, overlaps it. Whole-file
 /// anchors overlap any lines.
@@ -973,8 +977,9 @@ fn anchor_matches(anchor: &Anchor, path: &str, lines: Option<LineRange>) -> bool
         })
 }
 
-/// The commits making up `base..head` — the set a thread's anchored head must
-/// fall in to belong to that change. An empty diff is just its own commit.
+/// The commits making up `base..head` — the set one of a thread's anchored
+/// heads must fall in to belong to that change. An empty diff is just its own
+/// commit.
 fn range_commits(
     repo: &gix::Repository,
     base: ObjectId,
