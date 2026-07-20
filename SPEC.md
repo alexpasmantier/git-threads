@@ -226,7 +226,7 @@ Format & semantics
 
 - **Suggested changes**: patch-carrying events (GitHub "suggestion" blocks) applied with `git apply`; attachments already give them a reachable home.
 - **Review verdicts**: approve / request-changes events; per-review summary rollup.
-- **Patchset tracking** (Gerrit-style): link successive heads of a rebased series (via `range-diff`) so threads follow a PR across force-pushes.
+- **Patchset tracking** (Gerrit-style): link successive heads of a rebased series so threads follow a PR across force-pushes. Largely derivable with no stored state: `git patch-id --stable` is identical across a rebase, and §5.2 retention keeps the pre-rewrite commit readable in every clone, so a client can find an anchored commit's rewritten twin without having witnessed the rewrite — which is the normal case, since the rewriter is rarely the reader. What patch-id cannot recover is where the diff genuinely changed: conflict resolution, reordering commits that touch the same lines, and squash-merges of more than one commit (a squash reclassifies lines an earlier commit added as additions again, so no constituent patch-id survives). That residue is what `move` (§2.4 rule 5) is for.
 - **Stable change identities**: an optional `change_id` anchor field for backends with rebase-stable identities (jj change IDs, Gerrit Change-Ids), letting a thread follow a logical change across history rewrites — complementing, and possibly subsuming, patchset tracking.
 - **Reactions** (👍 events), **labels/tags** on threads.
 - **Sub-line anchors**: activate the reserved `cols` field (agents want exact spans).
@@ -243,6 +243,7 @@ Tooling
 
 - **CLI** — the single-player wedge. The reference implementation covers `comment|reply|edit|delete|resolve|move|discard|show|list|status|seen|pull|commit|push|init|import` (search via `list --grep`, machine output via `--json`, GitHub import per §8); `export` remains.
 - **GitLab importer** (the GitHub one ships in the reference CLI), then bidirectional PR sync.
+- **Re-pinning orphans in bulk**: after a squash-merge or force-push, threads whose anchored commit is no longer reachable can be located by re-anchoring (§4) and re-pinned with `move` events — a client command, no format change, and the result is shared data, so one person's run fixes the view for everyone. A git hook is the wrong shape here: forges squash server-side, where nothing local fires.
 - **Static HTML export** of a discussion for repo-less readers.
 - **Desktop review client**: syntax highlighting, LSP navigation, search — the niceties web review UIs lack.
 - **Agent integration**: discuss changes with an agent whose commentary persists as threads; conventions for agent long-form output (attachments, soft body-size cap — agent verbosity is the assumption most likely to break the storage math).
