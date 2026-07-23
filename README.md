@@ -2,31 +2,9 @@
 
 Code comments document code. Commit messages document diffs — but only as a whole. `git-threads` brings the granularity back: comment on a commit, a file in its diff, or a hunk.
 
-```text
-$ git threads show bebce03de90b
-thread bebce03de90bc053e93673edfce384fe1850da51 (resolved)
-Original: crates/git-threads/src/main.rs:94-94 of 1a5ef68157e9..73e0f8733413
-Current:  crates/git-threads/src/main.rs:146-146 at 384dc4475f29 (fuzzy(3))
+![git threads show](example.png)
 
-    143 │     }
-    144 │ }
-    145 │
->   146 │ fn main() -> anyhow::Result<()> {
-    147 │     reset_sigpipe();
-    148 │     let command = Cli::parse().command;
-    149 │     if let Command::Mangen { out } = command {
-
-comment bebce03de90b  Jane Doe <jane@example.com>  Fri Jul 3 08:25:40 2026 +0000
-    Piping output into `head` panics with a broken-pipe error (os error 32): println!
-    panics when stdout closes early. Standard fix is resetting SIGPIPE to default at
-    startup (or handling ErrorKind::BrokenPipe). Found while dogfooding `show | head`.
-
-reply   825537036788  Jane Doe <jane@example.com>  Fri Jul 3 08:28:18 2026 +0000
-    Fixed in 0976b6f: SIGPIPE is reset to SIG_DFL at startup (unix only), so the process
-    now exits quietly with 141 when the downstream pipe closes. Verified with `show | head`.
-```
-
-_The thread was pinned to line 94 at comment time; the code has since moved to line 146, and
+_The thread was pinned to line 94 at comment time; the code has since moved to line 246, and
 `show` found it again by snippet matching (`fuzzy(3)`)._
 
 All data lives on a dedicated ref (`refs/threads/data`) that any git host stores without needing to know about it, syncs
