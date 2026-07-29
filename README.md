@@ -2,7 +2,7 @@
 
 Code comments document code. Commit messages document diffs — but only as a whole. `git-threads` brings the granularity back: comment on a commit, a file in its diff, or a hunk.
 
-![git threads show](example.png)
+![git threads show](docs/example.png)
 
 _The comment sits on a line of the diff it targets, marked `>` in the hunk. It was pinned to
 line 100 at comment time; the code has since moved to line 242, and `show` re-anchored it
