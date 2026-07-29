@@ -25,7 +25,7 @@ fn setup() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let bare = root.path().join("remote.git");
     let seed = root.path().join("seed");
 
-    git(root.path(), &["init", "-q", "--bare", "remote.git"]);
+    git(root.path(), &["init", "-q", "--bare", "-b", "main", "remote.git"]);
     git(root.path(), &["init", "-q", "-b", "main", "seed"]);
     git(&seed, &["config", "user.name", "Seed"]);
     git(&seed, &["config", "user.email", "seed@example.com"]);
