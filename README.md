@@ -61,6 +61,19 @@ $ git threads push                          # share; safe under concurrent pushe
 $ git threads import github 123             # a PR's review threads, or --all (needs gh)
 ```
 
+`list --oneline`, on this repository's own threads:
+
+```console
+$ git threads list --oneline
+26e284120ff6 (resolved, 2 messages) crates/git-threads/src/store.rs:36-36 (fuzzy(3))  Drafts ref design note: this ref is deliberately outside the shared
+765f6c82e36c (open) SPEC.md:231-231 (fuzzy(3))  jj angle, expanded: in a colocated jj repo everything should work today
+140ecc21b176 (open, 2 messages) crates/git-threads/src/store.rs:194-194 (outdated)  Design question: this re-lists a diff.head as a retention parent even
+a02338118806 (open) crates/git-threads/src/commands.rs:193-193 (outdated)  list runs the full re-anchoring ladder for every thread on every
+bebce03de90b (resolved, 2 messages) crates/git-threads/src/main.rs:246-246 (fuzzy(3))  Piping output into `head` panics with a broken-pipe error (os error 32):
+0b9da2ad054d (resolved) commit 43bc41e25c4f  Dogfooding milestone: this thread was created by the tool itself, stored
+84727c6d0f7c (resolved, 4 messages) crates/git-threads/src/commands.rs:11-11 (outdated)  This refspec is exactly the clobber flaw SPEC.md §7.1 warns about: a
+```
+
 Optional: install man pages so `git threads --help` works (git routes it to `man git-threads`):
 
 ```console
