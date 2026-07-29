@@ -4,8 +4,9 @@ Code comments document code. Commit messages document diffs — but only as a wh
 
 ![git threads show](example.png)
 
-_The thread was pinned to line 94 at comment time; the code has since moved to line 246, and
-`show` found it again by snippet matching (`fuzzy(3)`)._
+_The comment sits on a line of the diff it targets, marked `>` in the hunk. It was pinned to
+line 100 at comment time; the code has since moved to line 242, and `show` re-anchored it
+there (`relocated`)._
 
 All data lives on a dedicated ref (`refs/threads/data`) that any git host stores without needing to know about it, syncs
 with plain push/fetch, and can never produce a merge conflict. When code moves, threads follow it: their position is
