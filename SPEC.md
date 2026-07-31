@@ -36,6 +36,7 @@ A specification for storing anchored discussions — threaded comments on commit
 | `resolve` | `resolved` (bool) | Toggles thread resolution state |
 | `delete` | `supersedes` | Tombstone: marks a prior event as retracted (content remains in history) |
 | `move` | `anchor` | Re-pins the thread: re-anchoring starts from this anchor instead of the thread's own (§2.4 rule 5). The carried anchor SHOULD be an empty diff (`base == head`) at the commit the mover consulted — a statement of where the code is, not of a change |
+| `mirror` | `of`, `origin` | Foreign-identity record (§8.2): the event named by `of` exists on a foreign system as `origin`. Bookkeeping, not discussion — it carries no folded state and clients SHOULD NOT render it as a message |
 
 Readers MUST ignore unknown fields and MUST preserve (not drop) events of unknown type when re-serializing.
 
@@ -199,9 +200,48 @@ GitHub, GitLab, and plain git servers accept pushes to `refs/threads/*` and simp
 
 ## 8. Interoperability
 
-- **Export** (GitHub/GitLab API, static HTML, email): materialize derived snippets (§4.1) so consumers without git object access can render context. The GitHub review-thread model (root comment at a diff position, `in_reply_to` replies, resolved bit) maps ~1:1 onto this format.
-- **Import**: foreign comments become threads with anchors reconstructed from the forge's position data; foreign identity maps into `author`; foreign IDs SHOULD be preserved in an `origin` field (`{"forge": "github", "id": "...", "url": "..."}`).
-- Round-trip sync (bidirectional PR mirroring) is out of scope for v1; see ideas.
+The forge review-thread model (root comment at a diff position, `in_reply_to` replies, resolved bit) maps ~1:1 onto this format, and anchors already store what forge APIs speak: file coordinates on a side (§3), never diff positions. Consumers without git object access (static HTML, email) get context by materializing derived snippets (§4.1) at the export boundary.
+
+### 8.1 Import
+
+Foreign comments become threads with anchors reconstructed from the forge's position data; foreign identity maps into `author`. Each imported event MUST carry its foreign ID in an `origin` field — the key that makes re-imports no-ops:
+
+```json
+"origin": { "forge": "github", "id": "<comment-id>", "url": "https://..." }
+```
+
+An importer MUST skip foreign items whose ID the store already records — in an imported event's own `origin`, or in a `mirror` event (§8.2), in which case references to the foreign item resolve to the event its `of` names. Imports SHOULD be deterministic — every event's bytes a function of forge data and the git DAG, never of import time — so independent clones importing the same discussion mint identical event IDs and the union merge (§7.2) dedupes them.
+
+### 8.2 Export and the `mirror` event
+
+Export posts threads to a foreign change (PR/MR): every thread in the change's range, and within each, every folded event (§2.4) that has no foreign identity yet — no `origin` of its own and no `mirror` naming it. A thread imported from that same change thus contributes only what was said locally since import, posted into the existing foreign thread via the imported root's `origin`.
+
+Events are append-only and content-addressed, so a published event can never be stamped with the identity the forge mints for it at post time. Recording that identity is the `mirror` event's job, appended to the thread after each successful post:
+
+```json
+{
+  "v": 1,
+  "type": "mirror",
+  "author": { "name": "...", "email": "..." },
+  "ts": "2026-07-31T09:15:02Z",
+  "of": "<event-id>",
+  "origin": { "forge": "gitlab", "id": "<note-id>", "url": "https://..." }
+}
+```
+
+`of` names the exported event; `origin` is its foreign identity, same shape as on import. `author` is the account that posted; `ts` SHOULD be the creation time the forge reports, not the exporter's clock. Because mirrors are shared data, one clone's export makes every clone's re-export a no-op — and inoculates every clone's import against re-importing the posted comments as foreign ones.
+
+Positions: re-anchor (§4) the effective anchor to the change's head; a unique match visible in the displayed diff exports as a line comment. Otherwise degrade honestly: a file-level comment when the path is in the diff, else a change-level comment carrying the materialized snippet. `commit` anchors are always change-level.
+
+Resolution is a single bit on a foreign thread, not an event log, so per-event tracking cannot express reopen cycles: exporters MUST reconcile it by comparing folded state against foreign state and toggling on mismatch. The mirror recorded for a toggle carries the foreign *thread* ID — the same ID import's synthetic resolve dedups on.
+
+Everything posts under the exporting account; when an event's `author` is someone else, exporters SHOULD prepend an attribution header (author, timestamp) to the posted body.
+
+Export is idempotent per store but not atomic across stores: forges offer no compare-and-swap, so two clones exporting the same new events concurrently can double-post. Exporters MUST NOT export draft events and SHOULD integrate remote thread data (§7.2) before posting.
+
+### 8.3 Round-trip
+
+Import and export compose into poll-based bidirectional mirroring with no state beyond `origin` and `mirror`: each direction skips what the other recorded, replies land in the right thread on both sides (import wires `in_reply_to` through mirrored IDs; export posts into the foreign thread the imported root names), and resolution reconciles by state comparison. Live sync (webhooks, notifications) remains delegated to the transport (§1).
 
 ## 9. Scaling notes (informative)
 
@@ -243,7 +283,7 @@ Storage & scale
 Tooling
 
 - **CLI** — the single-player wedge. The reference implementation covers `comment|reply|edit|delete|resolve|move|discard|show|list|status|seen|pull|commit|push|init|import` (search via `list --grep`, machine output via `--json`, GitHub import per §8); `export` remains.
-- **GitLab importer** (the GitHub one ships in the reference CLI), then bidirectional PR sync.
+- **GitLab importer and exporter** (the GitHub importer ships in the reference CLI); with export (§8.2) in place, bidirectional sync is a polling loop, not new format.
 - **Re-pinning orphans in bulk**: after a squash-merge or force-push, threads pinned to commits the rewrite left behind (still readable — §5.2 — just no longer part of the branch under review) can be located by re-anchoring (§4) and re-pinned with `move` events — a client command, no format change, and the result is shared data, so one person's run fixes the view for everyone. A git hook is the wrong shape here: forges squash server-side, where nothing local fires. Which threads are candidates is decided by re-anchor status, never by reconstructing what happened to the commit: a unique match (`exact`/`relocated`) at the target means the discussed code is there and the thread belongs there; no match means it isn't — whether the commit was dropped, reverted, or simply not merged yet — and the thread stays put. That test is also the orphan definition: off-target alone means nothing (threads on in-flight branches and unmerged imports legitimately live elsewhere); off-target *with* a unique match at the target is what a re-pin command reports and acts on. Content is the right question, not history: a dropped commit whose code someone else reintroduced *should* re-pin, and a squashed commit whose lines were reverted later in the same branch should not. `git range-diff` can pair old↔new commits beyond patch-id's exact twins, but in testing only at a tuned `--creation-factor` — a knob two clients would disagree on — so it is at most an interactive aid, never membership. `commit`-kind anchors are never re-anchored (§4.2), so a patch-id twin is their only automatic rescue.
 - **Static HTML export** of a discussion for repo-less readers.
 - **Desktop review client**: syntax highlighting, LSP navigation, search — the niceties web review UIs lack.
