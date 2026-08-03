@@ -147,6 +147,7 @@ mod tests {
             supersedes: None,
             resolved: None,
             anchor: None,
+            of: None,
             extra: Default::default(),
         }
     }

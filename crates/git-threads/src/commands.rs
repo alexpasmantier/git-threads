@@ -322,7 +322,7 @@ fn resolve_target(
 
 /// How far outside a hunk a comment may still sit — the unified-diff context
 /// a reviewer sees, and the same width snippets carry.
-const HUNK_CONTEXT: u32 = 3;
+pub(crate) const HUNK_CONTEXT: u32 = 3;
 
 /// Reject comments that don't touch their diff: the file must be changed
 /// between `base` and `head`, and `lines` (if any) must overlap a hunk on
@@ -373,7 +373,7 @@ fn ensure_in_diff(
 /// (start, length) of each hunk on `side`, in 1-based file coordinates, from
 /// unified-diff `@@ -a,b +c,d @@` headers. A zero length marks the point next
 /// to lines added or removed on the other side.
-fn hunk_spans(diff: &str, side: Side) -> Vec<(u32, u32)> {
+pub(crate) fn hunk_spans(diff: &str, side: Side) -> Vec<(u32, u32)> {
     diff.lines()
         .filter(|line| line.starts_with("@@"))
         .filter_map(|line| {
@@ -521,7 +521,10 @@ pub fn delete(store: &Store, event_prefix: &str) -> Result<Amendment> {
 /// The anchor re-anchoring starts from (SPEC.md §2.4 rule 5): the latest
 /// move's, else the thread's own. The original stays the record of what was
 /// discussed; the move records where that code lives now.
-fn effective_anchor<'a>(thread: &'a ThreadRecord, folded: &'a FoldedThread) -> &'a Anchor {
+pub(crate) fn effective_anchor<'a>(
+    thread: &'a ThreadRecord,
+    folded: &'a FoldedThread,
+) -> &'a Anchor {
     folded.moved.as_ref().and_then(|(_, e)| e.anchor.as_ref()).unwrap_or(&thread.anchor)
 }
 
@@ -857,6 +860,8 @@ fn unseen_ids(
         .filter(|(id, event)| {
             !seen.contains(id)
                 && !thread.drafts.contains(id)
+                // Mirrors are bookkeeping (SPEC.md §8.2), not activity.
+                && event.kind != EventKind::Mirror
                 && me.is_none_or(|me| me.email != event.author.email)
         })
         .map(|(id, _)| id.clone())
@@ -1109,7 +1114,7 @@ fn resolve_list_filters(
 /// Whether an imported event's origin URL points into PR/MR `number`: a
 /// `/pull/<n>` or `/merge_requests/<n>` path segment pair. Native threads
 /// carry no origin and never match.
-fn origin_pr(event: &Event, number: &str) -> bool {
+pub(crate) fn origin_pr(event: &Event, number: &str) -> bool {
     let Some(url) =
         event.extra.get("origin").and_then(|origin| origin.get("url")).and_then(|url| url.as_str())
     else {
@@ -1151,7 +1156,7 @@ fn anchor_matches(anchor: &Anchor, path: &str, lines: Option<LineRange>) -> bool
 /// patch) and unreadable commits simply never twin-match. Patch-ids are
 /// computed lazily: a listing where nothing was rewritten never pays for
 /// them.
-struct ChangeMembership<'a> {
+pub(crate) struct ChangeMembership<'a> {
     dir: &'a Path,
     base: ObjectId,
     head: ObjectId,
@@ -1163,7 +1168,7 @@ struct ChangeMembership<'a> {
 }
 
 impl<'a> ChangeMembership<'a> {
-    fn new(repo: &'a gix::Repository, base: ObjectId, head: ObjectId) -> Result<Self> {
+    pub(crate) fn new(repo: &'a gix::Repository, base: ObjectId, head: ObjectId) -> Result<Self> {
         Ok(Self {
             dir: repo.git_dir(),
             base,
@@ -1174,7 +1179,7 @@ impl<'a> ChangeMembership<'a> {
         })
     }
 
-    fn contains(&mut self, head: &str) -> bool {
+    pub(crate) fn contains(&mut self, head: &str) -> bool {
         if self.commits.contains(head) {
             return true;
         }
@@ -1440,6 +1445,7 @@ fn new_event(
         supersedes: None,
         resolved: None,
         anchor: None,
+        of: None,
         extra: Default::default(),
     };
     fill(&mut event);
@@ -1448,7 +1454,7 @@ fn new_event(
 }
 
 /// Author identity from git config / environment, same sources as commits.
-fn identity(repo: &gix::Repository) -> Result<Author> {
+pub(crate) fn identity(repo: &gix::Repository) -> Result<Author> {
     let signature = repo
         .author()
         .or_else(|| repo.committer())
@@ -1465,7 +1471,7 @@ fn now() -> Result<Timestamp> {
     Ok(Timestamp::parse(formatted)?)
 }
 
-fn resolve_commit(repo: &gix::Repository, spec: &str) -> Result<ObjectId> {
+pub(crate) fn resolve_commit(repo: &gix::Repository, spec: &str) -> Result<ObjectId> {
     let object = repo
         .rev_parse_single(spec)
         .with_context(|| format!("cannot resolve {spec:?}"))?

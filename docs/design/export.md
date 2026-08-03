@@ -25,8 +25,11 @@ is SPEC.md §8. This doc records the decisions and the implementation plan.
   export makes every clone's re-export a no-op, and import can't boomerang exported comments
   back as foreign ones. Client-local state can't give either guarantee.
 - **Resolution syncs by state comparison** (folded state vs the forge's resolved bit), never by
-  per-event markers — the only scheme that survives reopen cycles. The toggle's mirror carries
-  the foreign thread ID, which is exactly what import's synthetic-resolve dedup keys on.
+  per-event markers — the only scheme that survives reopen cycles — and only on a *new local
+  intent*: the latest local resolve event must itself lack foreign identity, so a folded state
+  that merely lags the forge is never pushed back over someone's newer toggle. The toggle's
+  mirror carries the foreign thread ID, which is exactly what import's synthetic-resolve dedup
+  keys on.
 - **Attribution header only on author mismatch.** Everything posts under the token's account;
   when the event author differs, the body gets a header line (`**name** · date · via
   git-threads`). One API call tells the executor who the token is.
@@ -104,9 +107,14 @@ Touchpoints outside the new file:
 ## Plan
 
 - [x] SPEC.md §8: `mirror` event, dedup and export rules
-- [ ] core: `EventKind::Mirror` + `of` field + validation + fold/render exclusion
-- [ ] `export.rs` planner + offline tests
-- [ ] GitHub executor + `export github <pr|url>` CLI + the `origin_index` `of` rule
-- [ ] round-trip test: export → import is a no-op; a forge reply imports onto the right event
+- [x] core: `EventKind::Mirror` + `of` field + validation + fold/render exclusion
+- [x] `export.rs` planner + offline tests
+- [x] GitHub executor + `export github <pr|url>` CLI + the `origin_index` `of` rule
+- [x] round-trip test: export → import is a no-op; a forge reply imports onto the right event
+      (caught a real bug: replies to a known root used to wire to a reconstructed event ID)
 - [ ] GitLab executor + `export gitlab <mr|url>`
 - [ ] GitLab importer (prerequisite for the full GitLab loop)
+
+Attribution note, settled during implementation: "the exporter's own comment" is judged against
+the local git identity, not the forge token — no extra API scope needed, and a bot token
+exporting a team's threads attributes everyone, which is what you want.

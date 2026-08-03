@@ -130,6 +130,11 @@ enum Command {
         #[command(subcommand)]
         source: ImportSource,
     },
+    /// Export local threads onto a forge review (SPEC.md §8.2)
+    Export {
+        #[command(subcommand)]
+        source: ExportSource,
+    },
     /// Fetch and integrate threads data from a remote
     Pull {
         /// Remote to pull from
@@ -212,6 +217,21 @@ enum ImportSource {
         /// Import every PR of the repository, open and closed
         #[arg(long, conflicts_with = "pr")]
         all: bool,
+        /// Remote naming the GitHub repository (and serving the commits)
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExportSource {
+    /// Post this change's threads onto a GitHub pull request (via the gh CLI)
+    Github {
+        /// PR number or full PR URL
+        pr: String,
+        /// Show what would be posted, without posting
+        #[arg(long)]
+        dry_run: bool,
         /// Remote naming the GitHub repository (and serving the commits)
         #[arg(long, default_value = "origin")]
         remote: String,
@@ -495,6 +515,26 @@ fn main() -> anyhow::Result<()> {
                     report.skipped,
                     if report.skipped == 1 { "" } else { "s" }
                 );
+            }
+            Ok(())
+        }
+        Command::Export { source } => {
+            let ExportSource::Github { pr, dry_run, remote } = source;
+            let report = git_threads::export::github(&store, &remote, &pr, dry_run)?;
+            match (report.dry_run, report.posts + report.resolves) {
+                (true, _) => {}
+                (false, 0) => println!("nothing to export (the PR already has everything)"),
+                (false, _) => println!(
+                    "exported {} message{} in {} thread{}{}",
+                    report.posts,
+                    if report.posts == 1 { "" } else { "s" },
+                    report.threads,
+                    if report.threads == 1 { "" } else { "s" },
+                    match report.resolves {
+                        0 => String::new(),
+                        n => format!(", {n} resolution toggle{}", if n == 1 { "" } else { "s" }),
+                    },
+                ),
             }
             Ok(())
         }

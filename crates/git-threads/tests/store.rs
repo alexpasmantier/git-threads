@@ -65,6 +65,7 @@ fn event(kind: EventKind, ts: &str) -> Event {
         supersedes: None,
         resolved: None,
         anchor: None,
+        of: None,
         extra: Default::default(),
     }
 }

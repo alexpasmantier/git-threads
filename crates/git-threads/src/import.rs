@@ -265,7 +265,13 @@ fn map_thread(
     let existing = index.get(root.id.as_str()).map(|(thread, _)| thread.clone());
 
     let root_event = message_event(root, EventKind::Comment, None)?;
-    let root_id = root_event.id()?;
+    // A known root keeps its indexed identity: for an *exported* comment
+    // (known through a mirror, SPEC.md §8.2) the local event's bytes differ
+    // from this reconstruction, and replies must wire to the real event.
+    let root_id = match index.get(root.id.as_str()) {
+        Some((_, event)) => event.clone(),
+        None => root_event.id()?,
+    };
     ids.insert(&root.id, root_id.clone());
     let thread_id = match &existing {
         Some(thread) => {
@@ -318,6 +324,7 @@ fn map_thread(
             supersedes: None,
             resolved: Some(true),
             anchor: None,
+            of: None,
             extra: Default::default(),
         };
         event.extra.insert("origin".into(), origin_value(&thread.id, None));
@@ -424,6 +431,7 @@ fn message_event(
         supersedes: None,
         resolved: None,
         anchor: None,
+        of: None,
         extra: Default::default(),
     };
     event.extra.insert("origin".into(), origin_value(&comment.id, Some(&comment.url)));
@@ -433,7 +441,7 @@ fn message_event(
 
 /// Forge identity → author. The login is the name; the email is GitHub's
 /// stable noreply form, keyed on the numeric account ID when known.
-fn author_of(user: &GhUser) -> Author {
+pub(crate) fn author_of(user: &GhUser) -> Author {
     let login = if user.login.is_empty() { "ghost" } else { &user.login };
     Author {
         name: login.to_string(),
@@ -444,7 +452,7 @@ fn author_of(user: &GhUser) -> Author {
     }
 }
 
-fn origin_value(id: &str, url: Option<&str>) -> serde_json::Value {
+pub(crate) fn origin_value(id: &str, url: Option<&str>) -> serde_json::Value {
     let mut origin = serde_json::Map::new();
     origin.insert("forge".into(), "github".into());
     origin.insert("id".into(), id.into());
@@ -455,7 +463,10 @@ fn origin_value(id: &str, url: Option<&str>) -> serde_json::Value {
 }
 
 /// Origin ID → (thread, event) for everything in the store, drafts included.
-/// What makes re-imports no-ops.
+/// What makes re-imports no-ops. A `mirror` event's origin belongs to the
+/// event its `of` names (SPEC.md §8.2) — that one rule is what keeps an
+/// exported comment from boomeranging back in as a foreign one, and wires
+/// forge replies to it onto the right local event.
 fn origin_index(store: &Store) -> Result<BTreeMap<String, (ThreadId, EventId)>> {
     let mut index = BTreeMap::new();
     for thread in store.threads()? {
@@ -466,7 +477,8 @@ fn origin_index(store: &Store) -> Result<BTreeMap<String, (ThreadId, EventId)>> 
                 .and_then(|origin| origin.get("id"))
                 .and_then(|id| id.as_str())
             {
-                index.insert(id.to_string(), (thread.id.clone(), event_id.clone()));
+                let target = event.of.as_ref().unwrap_or(event_id);
+                index.insert(id.to_string(), (thread.id.clone(), target.clone()));
             }
         }
     }
@@ -522,7 +534,7 @@ fn ensure_objects(store: &Store, workdir: &std::path::Path, source: &str, prs: &
     }
 }
 
-fn commit(repo: &gix::Repository, hex: &str) -> Result<ObjectId> {
+pub(crate) fn commit(repo: &gix::Repository, hex: &str) -> Result<ObjectId> {
     let oid = ObjectId::from_hex(hex.as_bytes())
         .map_err(|e| anyhow!("invalid commit id {hex:?}: {e}"))?;
     repo.find_commit(oid).with_context(|| format!("commit {hex} not present locally"))?;
@@ -531,7 +543,7 @@ fn commit(repo: &gix::Repository, hex: &str) -> Result<ObjectId> {
 
 /// `owner/name` from a github.com remote URL, in its ssh, https, or
 /// git-protocol spellings.
-fn github_slug(url: &str) -> Option<(String, String)> {
+pub(crate) fn github_slug(url: &str) -> Option<(String, String)> {
     let rest = url
         .strip_prefix("git@github.com:")
         .or_else(|| url.strip_prefix("ssh://git@github.com/"))
@@ -546,7 +558,7 @@ fn github_slug(url: &str) -> Option<(String, String)> {
 
 /// A PR spec: a number (`123`, `#123`) or a full PR URL, which also names
 /// the repository.
-fn parse_spec(spec: &str) -> Option<(Option<(String, String)>, u64)> {
+pub(crate) fn parse_spec(spec: &str) -> Option<(Option<(String, String)>, u64)> {
     if let Some(rest) =
         spec.strip_prefix("https://github.com/").or_else(|| spec.strip_prefix("http://github.com/"))
     {
@@ -815,7 +827,7 @@ fn fetch_remaining_comments(thread: &mut ReviewThread) -> Result<()> {
     Ok(())
 }
 
-fn gh(args: &[&str]) -> Result<String> {
+pub(crate) fn gh(args: &[&str]) -> Result<String> {
     let output = Command::new("gh")
         .args(args)
         .output()
