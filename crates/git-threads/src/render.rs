@@ -165,7 +165,7 @@ pub fn list_entry(
         };
         if !body.is_empty() {
             out.push('\n');
-            for line in body.lines() {
+            for line in wrap_body(&body).lines() {
                 writeln!(out, "    {line}").unwrap();
             }
         }
@@ -217,12 +217,42 @@ fn conversation(ui: Ui, view: &ThreadView) -> String {
         if message.retracted {
             writeln!(out, "    {}", ui.dim("[retracted]")).unwrap();
         } else if let Some(body) = &message.body {
-            for line in body.lines() {
+            for line in wrap_body(body).lines() {
                 writeln!(out, "    {line}").unwrap();
             }
         }
     }
     out
+}
+
+/// Display wrapping for message bodies. Stored text is verbatim — bodies
+/// are markdown that forges render as written (SPEC.md §2.2, §8) — so the
+/// 72-column convention is applied here, at render time; imported bodies,
+/// which were never wrapped, get the same treatment. Only unindented prose
+/// is re-flowed: indented lines are deliberate formatting (code, tables,
+/// quotes) and pass through untouched, as do words longer than the width
+/// (URLs).
+fn wrap_body(text: &str) -> String {
+    const WIDTH: usize = 72;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.chars().count() <= WIDTH || line.starts_with([' ', '\t']) {
+            out.push(line.to_string());
+            continue;
+        }
+        let mut current = String::new();
+        for word in line.split_whitespace() {
+            if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > WIDTH {
+                out.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+        out.push(current);
+    }
+    out.join("\n")
 }
 
 /// The `status` report: drafted events, unpushed counts per remote, new
@@ -468,4 +498,22 @@ fn excerpt(ui: Ui, content: &str, lines: LineRange) -> String {
 /// dim punctuation around already-colored parts.
 fn decorate(ui: Ui, parts: &[String]) -> String {
     format!("{}{}{}", ui.dim("("), parts.join(&ui.dim(", ")), ui.dim(")"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_body;
+
+    #[test]
+    fn wrap_body_reflows_prose_and_keeps_formatting() {
+        let long = "word ".repeat(20); // 99 chars, prose
+        let wrapped = wrap_body(long.trim_end());
+        assert!(wrapped.lines().count() == 2 && wrapped.lines().all(|l| l.len() <= 72));
+
+        let formatted = format!("    {}", "x".repeat(80)); // indented: verbatim
+        assert_eq!(wrap_body(&formatted), formatted);
+
+        let url = "x".repeat(80); // one long word: verbatim
+        assert_eq!(wrap_body(&url), url);
+    }
 }
