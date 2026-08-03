@@ -110,6 +110,7 @@ pub enum EventKind {
     Resolve,
     Delete,
     Move,
+    Mirror,
     Other(String),
 }
 
@@ -122,6 +123,7 @@ impl From<String> for EventKind {
             "resolve" => EventKind::Resolve,
             "delete" => EventKind::Delete,
             "move" => EventKind::Move,
+            "mirror" => EventKind::Mirror,
             _ => EventKind::Other(s),
         }
     }
@@ -136,6 +138,7 @@ impl From<EventKind> for String {
             EventKind::Resolve => "resolve".into(),
             EventKind::Delete => "delete".into(),
             EventKind::Move => "move".into(),
+            EventKind::Mirror => "mirror".into(),
             EventKind::Other(s) => s,
         }
     }
@@ -161,6 +164,9 @@ pub struct Event {
     pub resolved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<Anchor>,
+    /// The event a `mirror` records foreign identity for (SPEC.md §8.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of: Option<EventId>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -183,12 +189,27 @@ impl Event {
             return Err(EventError::UnsupportedVersion(self.v));
         }
         let (required, forbidden): (&[&str], &[&str]) = match self.kind {
-            EventKind::Comment => (&["body"], &["in_reply_to", "supersedes", "resolved", "anchor"]),
-            EventKind::Reply => (&["body", "in_reply_to"], &["supersedes", "resolved", "anchor"]),
-            EventKind::Edit => (&["body", "supersedes"], &["in_reply_to", "resolved", "anchor"]),
-            EventKind::Resolve => (&["resolved"], &["body", "in_reply_to", "supersedes", "anchor"]),
-            EventKind::Delete => (&["supersedes"], &["body", "in_reply_to", "resolved", "anchor"]),
-            EventKind::Move => (&["anchor"], &["body", "in_reply_to", "supersedes", "resolved"]),
+            EventKind::Comment => {
+                (&["body"], &["in_reply_to", "supersedes", "resolved", "anchor", "of"])
+            }
+            EventKind::Reply => {
+                (&["body", "in_reply_to"], &["supersedes", "resolved", "anchor", "of"])
+            }
+            EventKind::Edit => {
+                (&["body", "supersedes"], &["in_reply_to", "resolved", "anchor", "of"])
+            }
+            EventKind::Resolve => {
+                (&["resolved"], &["body", "in_reply_to", "supersedes", "anchor", "of"])
+            }
+            EventKind::Delete => {
+                (&["supersedes"], &["body", "in_reply_to", "resolved", "anchor", "of"])
+            }
+            EventKind::Move => {
+                (&["anchor"], &["body", "in_reply_to", "supersedes", "resolved", "of"])
+            }
+            EventKind::Mirror => {
+                (&["of", "origin"], &["body", "in_reply_to", "supersedes", "resolved", "anchor"])
+            }
             EventKind::Other(_) => (&[], &[]),
         };
         let kind = String::from(self.kind.clone());
@@ -198,6 +219,8 @@ impl Event {
             "supersedes" => self.supersedes.is_some(),
             "resolved" => self.resolved.is_some(),
             "anchor" => self.anchor.is_some(),
+            "of" => self.of.is_some(),
+            "origin" => self.extra.contains_key("origin"),
             _ => unreachable!(),
         };
         for &field in required {
@@ -221,6 +244,8 @@ fn leak(field: &str) -> &'static str {
         "supersedes" => "supersedes",
         "resolved" => "resolved",
         "anchor" => "anchor",
+        "of" => "of",
+        "origin" => "origin",
         _ => unreachable!(),
     }
 }
@@ -244,6 +269,7 @@ mod tests {
             supersedes: None,
             resolved: None,
             anchor: None,
+            of: None,
             extra: Default::default(),
         }
     }
@@ -310,6 +336,31 @@ mod tests {
         event.kind = EventKind::Move;
         event.body = None;
         assert!(matches!(event.validate(), Err(EventError::MissingField { field: "anchor", .. })));
+    }
+
+    #[test]
+    fn mirror_requires_of_and_origin() {
+        let raw = r#"{"v":1,"type":"mirror","author":{"name":"n","email":"e"},"ts":"2026-01-01T00:00:00Z","of":"0dfeaf728bb362b9b0b8f40fb20b17ff7c96b1cc","origin":{"forge":"github","id":"x"}}"#;
+        let event: Event = serde_json::from_str(raw).unwrap();
+        assert_eq!(event.kind, EventKind::Mirror);
+        event.validate().unwrap();
+
+        let mut missing_origin = event.clone();
+        missing_origin.extra.remove("origin");
+        assert!(matches!(
+            missing_origin.validate(),
+            Err(EventError::MissingField { field: "origin", .. })
+        ));
+        let mut missing_of = event.clone();
+        missing_of.of = None;
+        assert!(matches!(missing_of.validate(), Err(EventError::MissingField { field: "of", .. })));
+
+        let mut chatter = event;
+        chatter.body = Some("not a message".into());
+        assert!(matches!(
+            chatter.validate(),
+            Err(EventError::ForbiddenField { field: "body", .. })
+        ));
     }
 
     #[test]
