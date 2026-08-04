@@ -29,9 +29,9 @@ recomputed against whatever commit you're looking at.
 The format and CLI cover the whole loop — comment, reply, edit, delete, resolve, move,
 discard, show, list (with `--grep` search and `--json` output), status, a local inbox
 (`list --new`), the git-shaped pull/commit/push cycle with drafts, session batching,
-and re-anchoring, plus GitHub import *and* export — PR review history liberated into
-the repository, and local answers and resolutions posted back onto the PR, each side
-skipping what the other already has. Threads survive rebases and squash-merges: listings match rewritten commits
+and re-anchoring, plus import *and* export for GitHub and GitLab — PR/MR review history
+liberated into the repository, and local answers and resolutions posted back onto the
+review, each side skipping what the other already has. Threads survive rebases and squash-merges: listings match rewritten commits
 by patch-id, `move --orphans` re-pins what that can't reach, and `list --pr` finds an
 imported PR's history no matter what happened to its branch. The test suite exercises
 every subsystem against real repositories; CI runs it on Linux, macOS, and Windows; and
@@ -61,6 +61,7 @@ $ git threads push                          # share; safe under concurrent pushe
 
 $ git threads import github 123             # a PR's review threads, or --all (needs gh)
 $ git threads export github 123 --dry-run   # what the PR is missing; drop the flag to post it
+$ git threads import gitlab '!7'            # the same pair exists for GitLab MRs (needs glab)
 ```
 
 `list --oneline`, on this repository's own threads:

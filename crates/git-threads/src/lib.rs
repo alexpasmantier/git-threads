@@ -10,6 +10,7 @@
 pub mod commands;
 pub mod editor;
 pub mod export;
+pub mod gitlab;
 pub mod import;
 pub mod pager;
 pub mod reanchor;

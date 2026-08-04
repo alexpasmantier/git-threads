@@ -112,8 +112,13 @@ Touchpoints outside the new file:
 - [x] GitHub executor + `export github <pr|url>` CLI + the `origin_index` `of` rule
 - [x] round-trip test: export → import is a no-op; a forge reply imports onto the right event
       (caught a real bug: replies to a known root used to wire to a reconstructed event ID)
-- [ ] GitLab executor + `export gitlab <mr|url>`
-- [ ] GitLab importer (prerequisite for the full GitLab loop)
+- [x] GitLab executor + `export gitlab <mr|url>`
+- [x] GitLab importer (prerequisite for the full GitLab loop)
+
+GitLab v1 simplifications (in `gitlab.rs`): multi-line ranges post at the range's last line
+(GitLab's `line_range` wants hashed line codes); replies to a lone MR comment become MR-level
+notes (individual notes take no thread replies); positionless discussions are imported never,
+exported as change-level — but unlike GitHub's issue comments they stay resolvable threads.
 
 Attribution note, settled during implementation: "the exporter's own comment" is judged against
 the local git identity, not the forge token — no extra API scope needed, and a bot token

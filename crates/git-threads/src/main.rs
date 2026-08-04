@@ -221,6 +221,17 @@ enum ImportSource {
         #[arg(long, default_value = "origin")]
         remote: String,
     },
+    /// Import a merge request's diff discussions from GitLab (via the glab CLI)
+    Gitlab {
+        /// MR number (also !N) or full MR URL; omit with --all
+        mr: Option<String>,
+        /// Import every MR of the project, open and closed
+        #[arg(long, conflicts_with = "mr")]
+        all: bool,
+        /// Remote naming the GitLab project (and serving the commits)
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -233,6 +244,17 @@ enum ExportSource {
         #[arg(long)]
         dry_run: bool,
         /// Remote naming the GitHub repository (and serving the commits)
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+    /// Post this change's threads onto a GitLab merge request (via the glab CLI)
+    Gitlab {
+        /// MR number (also !N) or full MR URL
+        mr: String,
+        /// Show what would be posted, without posting
+        #[arg(long)]
+        dry_run: bool,
+        /// Remote naming the GitLab project (and serving the commits)
         #[arg(long, default_value = "origin")]
         remote: String,
     },
@@ -486,11 +508,20 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Import { source } => {
-            let ImportSource::Github { pr, all, remote } = source;
-            if pr.is_none() && !all {
-                anyhow::bail!("pass a PR number or URL, or --all");
-            }
-            let report = git_threads::import::github(&store, &remote, pr.as_deref(), all)?;
+            let report = match source {
+                ImportSource::Github { pr, all, remote } => {
+                    if pr.is_none() && !all {
+                        anyhow::bail!("pass a PR number or URL, or --all");
+                    }
+                    git_threads::import::github(&store, &remote, pr.as_deref(), all)?
+                }
+                ImportSource::Gitlab { mr, all, remote } => {
+                    if mr.is_none() && !all {
+                        anyhow::bail!("pass an MR number or URL, or --all");
+                    }
+                    git_threads::gitlab::import(&store, &remote, mr.as_deref(), all)?
+                }
+            };
             if report.events == 0 {
                 match report.known {
                     0 => println!("nothing to import"),
@@ -519,11 +550,17 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Export { source } => {
-            let ExportSource::Github { pr, dry_run, remote } = source;
-            let report = git_threads::export::github(&store, &remote, &pr, dry_run)?;
+            let report = match source {
+                ExportSource::Github { pr, dry_run, remote } => {
+                    git_threads::export::github(&store, &remote, &pr, dry_run)?
+                }
+                ExportSource::Gitlab { mr, dry_run, remote } => {
+                    git_threads::gitlab::export(&store, &remote, &mr, dry_run)?
+                }
+            };
             match (report.dry_run, report.posts + report.resolves) {
                 (true, _) => {}
-                (false, 0) => println!("nothing to export (the PR already has everything)"),
+                (false, 0) => println!("nothing to export (the change already has everything)"),
                 (false, _) => println!(
                     "exported {} message{} in {} thread{}{}",
                     report.posts,
