@@ -506,7 +506,7 @@ pub fn github(store: &Store, remote: &str, spec: &str, dry_run: bool) -> Result<
             };
             pace.wait();
             toggle_resolve(foreign_thread, action.to)?;
-            let mirror = resolve_mirror(&me, &action, foreign_thread)?;
+            let mirror = resolve_mirror(&me, &action, "github", foreign_thread)?;
             let batch = Batch {
                 appends: vec![Append { thread, events: vec![mirror] }],
                 ..Default::default()
@@ -569,6 +569,7 @@ fn export_thread(
             mirrors.push(mirror_event(
                 me,
                 first,
+                "github",
                 &root.node_id,
                 Some(&root.html_url),
                 &root.created_at,
@@ -585,6 +586,7 @@ fn export_thread(
                 mirrors.push(mirror_event(
                     me,
                     post,
+                    "github",
                     &posted.node_id,
                     Some(&posted.html_url),
                     &posted.created_at,
@@ -622,6 +624,7 @@ fn export_thread(
                 mirrors.push(mirror_event(
                     me,
                     post,
+                    "github",
                     &posted.node_id,
                     Some(&posted.html_url),
                     &posted.created_at,
@@ -640,7 +643,7 @@ fn export_thread(
                 if is_review_thread {
                     pace.wait();
                     toggle_resolve(foreign_thread, action.to)?;
-                    mirrors.push(resolve_mirror(me, action, foreign_thread)?);
+                    mirrors.push(resolve_mirror(me, action, "github", foreign_thread)?);
                     report.resolves += 1;
                     println!(
                         "thread {}: {} on the PR",
@@ -660,7 +663,7 @@ fn export_thread(
 }
 
 /// What `--dry-run` prints: the plan, one thread per line.
-fn print_plan(plan: &Plan) {
+pub(crate) fn print_plan(plan: &Plan) {
     for thread in &plan.threads {
         let action = match &thread.target {
             Target::New { position } => format!("would create {}", describe(position)),
@@ -683,7 +686,7 @@ fn print_plan(plan: &Plan) {
     }
 }
 
-fn describe(position: &Position) -> String {
+pub(crate) fn describe(position: &Position) -> String {
     match position {
         Position::Line { path, side, lines } => {
             let lines = match lines.start == lines.end {
@@ -750,9 +753,10 @@ fn viewer() -> Result<Author> {
 }
 
 /// One `mirror` event (SPEC.md §8.2) for a posted message.
-fn mirror_event(
+pub(crate) fn mirror_event(
     me: &Author,
     post: &Post,
+    forge: &str,
     foreign_id: &str,
     url: Option<&str>,
     created_at: &str,
@@ -770,7 +774,7 @@ fn mirror_event(
         of: Some(post.event.clone()),
         extra: Default::default(),
     };
-    event.extra.insert("origin".into(), import::origin_value(foreign_id, url));
+    event.extra.insert("origin".into(), import::origin_value(forge, foreign_id, url));
     event.validate()?;
     Ok(event)
 }
@@ -779,7 +783,12 @@ fn mirror_event(
 /// the origin is the foreign *thread* — exactly the ID import's synthetic
 /// resolve dedups on. The forge reports no toggle time, so `ts` is the
 /// mirrored event's own.
-fn resolve_mirror(me: &Author, action: &ResolveAction, foreign_thread: &str) -> Result<Event> {
+pub(crate) fn resolve_mirror(
+    me: &Author,
+    action: &ResolveAction,
+    forge: &str,
+    foreign_thread: &str,
+) -> Result<Event> {
     let mut mirror = Event {
         v: 1,
         kind: EventKind::Mirror,
@@ -793,7 +802,7 @@ fn resolve_mirror(me: &Author, action: &ResolveAction, foreign_thread: &str) -> 
         of: Some(action.event.clone()),
         extra: Default::default(),
     };
-    mirror.extra.insert("origin".into(), import::origin_value(foreign_thread, None));
+    mirror.extra.insert("origin".into(), import::origin_value(forge, foreign_thread, None));
     mirror.validate()?;
     Ok(mirror)
 }
@@ -801,12 +810,12 @@ fn resolve_mirror(me: &Author, action: &ResolveAction, foreign_thread: &str) -> 
 /// Content-creation pacing: forges rate-limit writes far below reads, so
 /// mutations go out at most one per second.
 #[derive(Default)]
-struct Pace {
+pub(crate) struct Pace {
     started: bool,
 }
 
 impl Pace {
-    fn wait(&mut self) {
+    pub(crate) fn wait(&mut self) {
         if std::mem::replace(&mut self.started, true) {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }

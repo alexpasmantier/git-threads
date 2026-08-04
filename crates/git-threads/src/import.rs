@@ -114,7 +114,7 @@ pub struct ImportReport {
 }
 
 impl ImportReport {
-    fn absorb(&mut self, other: ImportReport) {
+    pub(crate) fn absorb(&mut self, other: ImportReport) {
         self.prs += other.prs;
         self.threads += other.threads;
         self.events += other.events;
@@ -327,7 +327,7 @@ fn map_thread(
             of: None,
             extra: Default::default(),
         };
-        event.extra.insert("origin".into(), origin_value(&thread.id, None));
+        event.extra.insert("origin".into(), origin_value("github", &thread.id, None));
         event.validate()?;
         events.push(event);
     }
@@ -434,7 +434,7 @@ fn message_event(
         of: None,
         extra: Default::default(),
     };
-    event.extra.insert("origin".into(), origin_value(&comment.id, Some(&comment.url)));
+    event.extra.insert("origin".into(), origin_value("github", &comment.id, Some(&comment.url)));
     event.validate()?;
     Ok(event)
 }
@@ -452,9 +452,9 @@ pub(crate) fn author_of(user: &GhUser) -> Author {
     }
 }
 
-pub(crate) fn origin_value(id: &str, url: Option<&str>) -> serde_json::Value {
+pub(crate) fn origin_value(forge: &str, id: &str, url: Option<&str>) -> serde_json::Value {
     let mut origin = serde_json::Map::new();
-    origin.insert("forge".into(), "github".into());
+    origin.insert("forge".into(), forge.into());
     origin.insert("id".into(), id.into());
     if let Some(url) = url {
         origin.insert("url".into(), url.into());
@@ -467,7 +467,7 @@ pub(crate) fn origin_value(id: &str, url: Option<&str>) -> serde_json::Value {
 /// event its `of` names (SPEC.md §8.2) — that one rule is what keeps an
 /// exported comment from boomeranging back in as a foreign one, and wires
 /// forge replies to it onto the right local event.
-fn origin_index(store: &Store) -> Result<BTreeMap<String, (ThreadId, EventId)>> {
+pub(crate) fn origin_index(store: &Store) -> Result<BTreeMap<String, (ThreadId, EventId)>> {
     let mut index = BTreeMap::new();
     for thread in store.threads()? {
         for (event_id, event) in &thread.events {
