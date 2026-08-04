@@ -57,7 +57,7 @@ Every event is one JSON document:
 
 - `ts`: ISO 8601, UTC, second precision. Used for ordering and last-writer-wins.
 - `author`: same semantics as git commit authorship. Optional `sig` field is reserved for future signing (§ideas).
-- `body`: UTF-8 Markdown (CommonMark). Always inline — never a blob reference (§5.3).
+- `body`: UTF-8 Markdown (CommonMark), stored as authored — writers SHOULD NOT re-wrap or reformat it (display wrapping is a renderer concern, and forges render markdown line breaks literally, so stored wrapping would leak into exports, §8). Always inline — never a blob reference (§5.3).
 
 ### 2.3 Identifiers
 
