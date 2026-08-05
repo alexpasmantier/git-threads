@@ -540,6 +540,39 @@ fn list_grep_searches_folded_bodies() {
 }
 
 #[test]
+fn fully_retracted_threads_hide_from_list() {
+    let dir = setup_repo();
+    let path = dir.path();
+    let store = Store::open(path).unwrap();
+
+    let noise = commands::comment(&store, &opts("posted on the wrong repo")).unwrap();
+    commands::delete(&store, noise.as_str()).unwrap();
+    let kept = commands::comment(&store, &opts("root goes away")).unwrap();
+    commands::reply(&store, kept.as_str(), "but the reply lives").unwrap();
+    commands::delete(&store, kept.as_str()).unwrap();
+
+    let list = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+            .current_dir(path)
+            .args(["list", "--oneline"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    // Fully retracted → hidden; a retracted root with a live reply stays.
+    let default = list(&[]);
+    assert!(!default.contains(&noise.as_str()[..12]), "{default}");
+    assert!(default.contains(&kept.as_str()[..12]), "{default}");
+
+    let all = list(&["--all"]);
+    assert!(all.contains(&noise.as_str()[..12]), "{all}");
+    assert!(all.contains(&kept.as_str()[..12]), "{all}");
+}
+
+#[test]
 fn json_output_carries_folded_state_and_placement() {
     let dir = setup_repo();
     let path = dir.path();
