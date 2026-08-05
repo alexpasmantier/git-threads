@@ -738,6 +738,8 @@ pub struct ListOpts {
     pub resolved: Option<bool>,
     /// Only threads with events you haven't seen.
     pub new: bool,
+    /// Include threads whose every message is retracted (hidden by default).
+    pub all: bool,
     /// git log's -n: stop after this many threads.
     pub max_count: Option<usize>,
     /// Only threads imported from this pull/merge request number.
@@ -798,6 +800,11 @@ pub fn list(store: &Store, opts: &ListOpts) -> Result<Vec<ThreadView>> {
             continue;
         }
         let folded = fold_thread(thread.events.clone());
+        // A fully retracted thread has nothing left to read; keep it out of
+        // the list unless asked. `show` by ID still displays it.
+        if !opts.all && folded.events.iter().all(|e| e.retracted) {
+            continue;
+        }
         if opts.resolved.is_some_and(|want| folded.resolved != want) {
             continue;
         }

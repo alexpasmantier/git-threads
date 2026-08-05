@@ -168,6 +168,9 @@ enum Command {
         /// Only threads with messages you haven't seen yet
         #[arg(long)]
         new: bool,
+        /// Include retracted threads (every message deleted), hidden by default
+        #[arg(long)]
+        all: bool,
         /// One line per thread instead of the full block
         #[arg(long)]
         oneline: bool,
@@ -613,6 +616,7 @@ fn main() -> anyhow::Result<()> {
             open,
             resolved,
             new,
+            all,
             oneline,
             patch,
             stat,
@@ -637,6 +641,7 @@ fn main() -> anyhow::Result<()> {
                     at,
                     resolved: state,
                     new,
+                    all,
                     max_count,
                     pr,
                     author,
