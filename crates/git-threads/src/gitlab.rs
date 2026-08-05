@@ -119,7 +119,7 @@ pub fn import(store: &Store, remote: &str, spec: Option<&str>, all: bool) -> Res
     let (workdir, host, project) = project_of(store, remote, spec)?;
     let encoded = project.replace('/', "%2F");
 
-    let mrs: Vec<MrInfo> = if all {
+    let mrs: Vec<MrSummary> = if all {
         fetch_all_mrs(&workdir, &encoded)?
     } else {
         let spec = spec.context("pass an MR number or URL, or --all")?;
@@ -127,7 +127,7 @@ pub fn import(store: &Store, remote: &str, spec: Option<&str>, all: bool) -> Res
             .with_context(|| format!("cannot parse {spec:?} as an MR number or GitLab MR URL"))?;
         let mr = fetch_mr(&workdir, &encoded, iid)?
             .with_context(|| format!("no merge request !{iid} in {project}"))?;
-        vec![mr]
+        vec![MrSummary { iid: mr.iid, web_url: mr.web_url }]
     };
 
     let mut report = ImportReport::default();
@@ -803,6 +803,14 @@ struct MrInfo {
     diff_refs: MrDiffRefs,
 }
 
+/// What the MR *list* endpoint reports — no `diff_refs` there. Import never
+/// needs them: note positions carry their own SHAs.
+#[derive(Clone, Debug, Deserialize)]
+struct MrSummary {
+    iid: u64,
+    web_url: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct MrDiffRefs {
     base_sha: String,
@@ -863,14 +871,14 @@ fn fetch_discussions(workdir: &Path, project: &str, iid: u64) -> Result<Vec<Disc
 }
 
 /// Every MR of the project, oldest first, with progress on stderr.
-fn fetch_all_mrs(workdir: &Path, project: &str) -> Result<Vec<MrInfo>> {
+fn fetch_all_mrs(workdir: &Path, project: &str) -> Result<Vec<MrSummary>> {
     let mut all = Vec::new();
     for page in 1.. {
         let endpoint = format!(
             "projects/{project}/merge_requests?state=all&order_by=created_at&sort=asc&per_page=100&page={page}"
         );
         let out = glab(workdir, &["api", &endpoint])?;
-        let items: Vec<MrInfo> =
+        let items: Vec<MrSummary> =
             serde_json::from_str(&out).context("unexpected glab api merge_requests output")?;
         let last_page = items.len() < 100;
         all.extend(items);
