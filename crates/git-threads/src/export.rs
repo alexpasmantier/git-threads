@@ -247,6 +247,9 @@ pub fn plan(store: &Store, change: &ChangeState) -> Result<Plan> {
         // §8.2: toggle only on a new local intent that the forge disagrees
         // with. An imported or already-mirrored latest resolve means the
         // forge has the newer say — a stale local state is never pushed.
+        // Forge-level comment trails have no resolution to toggle, ever, so
+        // planning one would just re-fire on every run.
+        let resolvable_target = !onto.is_some_and(|foreign| foreign.is_pr_level);
         let resolve = record
             .events
             .iter()
@@ -254,11 +257,9 @@ pub fn plan(store: &Store, change: &ChangeState) -> Result<Plan> {
             .max_by_key(|(id, e)| (e.ts.clone(), (*id).clone()))
             .and_then(|(id, e)| {
                 let new_intent = !foreign_ids.contains_key(id) && !record.drafts.contains(id);
-                (new_intent && folded.resolved != foreign_resolved).then(|| ResolveAction {
-                    event: id.clone(),
-                    ts: e.ts.clone(),
-                    to: folded.resolved,
-                })
+                (resolvable_target && new_intent && folded.resolved != foreign_resolved).then(
+                    || ResolveAction { event: id.clone(), ts: e.ts.clone(), to: folded.resolved },
+                )
             });
 
         // Nothing new to say and nothing to toggle — or a would-be new
@@ -639,23 +640,18 @@ fn export_thread(
                     if plan.posts.len() == 1 { "y" } else { "ies" }
                 );
             }
+            // The planner never plans a toggle for a PR-level trail, so a
+            // resolve here always has a review thread to act on.
             if let Some(action) = &plan.resolve {
-                if is_review_thread {
-                    pace.wait();
-                    toggle_resolve(foreign_thread, action.to)?;
-                    mirrors.push(resolve_mirror(me, action, "github", foreign_thread)?);
-                    report.resolves += 1;
-                    println!(
-                        "thread {}: {} on the PR",
-                        short(&plan.thread),
-                        if action.to { "resolved" } else { "reopened" }
-                    );
-                } else {
-                    eprintln!(
-                        "note: thread {} is resolved locally, but a change-level comment has no resolution to toggle",
-                        short(&plan.thread)
-                    );
-                }
+                pace.wait();
+                toggle_resolve(foreign_thread, action.to)?;
+                mirrors.push(resolve_mirror(me, action, "github", foreign_thread)?);
+                report.resolves += 1;
+                println!(
+                    "thread {}: {} on the PR",
+                    short(&plan.thread),
+                    if action.to { "resolved" } else { "reopened" }
+                );
             }
         }
     }
