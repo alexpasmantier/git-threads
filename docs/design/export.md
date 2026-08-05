@@ -116,14 +116,17 @@ Touchpoints outside the new file:
 - [x] GitLab importer (prerequisite for the full GitLab loop)
 
 GitLab v1 simplifications (in `gitlab.rs`): multi-line ranges post at the range's last line
-(GitLab's `line_range` wants hashed line codes); replies to a lone MR comment become MR-level
-notes (individual notes take no thread replies); positionless discussions are imported never,
+(GitLab's `line_range` wants hashed line codes); positionless discussions are imported never,
 exported as change-level — but unlike GitHub's issue comments they stay resolvable threads.
+Replying to a lone MR comment *converts* it into a real thread (verified live; only system
+notes refuse replies), so replies route through the discussion like any other.
 
-Resolutions of threads living as forge-level comment trails (GitHub issue comments, GitLab lone
-notes) are never planned: there is nothing to toggle, and a plan that can't act would re-fire on
-every export. They live in threads data only; the one-time note at creation (GitHub) is the only
-mention. Found by dogfooding a hand-crafted third-party thread onto a lone MR note.
+Resolutions of threads living as forge-level comment trails are never planned — there is
+nothing to toggle, and a plan that can't act would re-fire on every export. On GitHub that's
+permanent (issue comments never become threads; the one-time note at creation is the only
+mention). On GitLab it self-heals: a reply converts the lone note into a resolvable discussion,
+and the next export sees the conversion and toggles. Both found by dogfooding a hand-crafted
+third-party thread onto a lone MR note.
 
 Attribution note, settled during implementation: "the exporter's own comment" is judged against
 the local git identity, not the forge token — no extra API scope needed, and a bot token

@@ -441,6 +441,10 @@ pub fn export(
                 id: d.id.clone(),
                 is_resolved: root.resolvable && root.resolved == Some(true),
                 comments: notes.iter().map(|n| n.id.to_string()).collect(),
+                // A lone MR comment: replies convert it into a real thread,
+                // but until then there is no resolution to toggle — the
+                // planner holds resolves back for one run, and the next
+                // fetch sees a converted, resolvable discussion.
                 is_pr_level: d.individual_note,
             })
         })
@@ -468,8 +472,6 @@ pub fn export(
     }
 
     let me = viewer(&workdir, &host)?;
-    let individual: std::collections::BTreeSet<&str> =
-        change.threads.iter().filter(|t| t.is_pr_level).map(|t| t.id.as_str()).collect();
     let mut pace = export::Pace::default();
     for thread_plan in &plan.threads {
         let mut mirrors: Vec<Event> = Vec::new();
@@ -479,7 +481,6 @@ pub fn export(
             &mr,
             &me,
             thread_plan,
-            &individual,
             &mut pace,
             &mut mirrors,
             &mut report,
@@ -506,7 +507,6 @@ fn export_thread(
     mr: &MrInfo,
     me: &Author,
     plan: &ThreadPlan,
-    individual: &std::collections::BTreeSet<&str>,
     pace: &mut export::Pace,
     mirrors: &mut Vec<Event>,
     report: &mut export::ExportReport,
@@ -553,16 +553,12 @@ fn export_thread(
             }
         }
         Target::Existing { foreign_thread } => {
-            let lone_note = individual.contains(foreign_thread.as_str());
+            // Lone MR comments included: replying to one converts it into a
+            // real thread (verified live; only *system* notes refuse), so
+            // everything routes through the discussion.
             for post in &plan.posts {
                 pace.wait();
-                let note = if lone_note {
-                    // A lone MR comment takes no replies; the answer becomes
-                    // its own MR-level note, in order.
-                    add_mr_note(workdir, project, mr.iid, &post.body)?
-                } else {
-                    add_note(workdir, project, mr.iid, foreign_thread, &post.body)?
-                };
+                let note = add_note(workdir, project, mr.iid, foreign_thread, &post.body)?;
                 mirrors.push(mirror(post, &note)?);
                 report.posts += 1;
             }
@@ -712,16 +708,6 @@ fn add_note(
 ) -> Result<CreatedNote> {
     let endpoint =
         format!("projects/{project}/merge_requests/{iid}/discussions/{discussion}/notes");
-    let body_field = format!("body={body}");
-    serde_json::from_str(&glab(
-        workdir,
-        &["api", "--method", "POST", &endpoint, "-f", &body_field],
-    )?)
-    .context("unexpected glab api output for a posted note")
-}
-
-fn add_mr_note(workdir: &Path, project: &str, iid: u64, body: &str) -> Result<CreatedNote> {
-    let endpoint = format!("projects/{project}/merge_requests/{iid}/notes");
     let body_field = format!("body={body}");
     serde_json::from_str(&glab(
         workdir,

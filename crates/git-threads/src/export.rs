@@ -203,9 +203,13 @@ pub fn plan(store: &Store, change: &ChangeState) -> Result<Plan> {
             .collect();
 
         // Any foreign identity mapping onto the change names the thread to
-        // post into; foreign identities that all point elsewhere mean the
-        // thread already lives on another change (or forge).
-        let onto = foreign_ids.values().find_map(|fid| on_change.get(fid).copied());
+        // post into — preferring a real review thread over a forge-level
+        // comment trail when events are mirrored across both (a GitLab lone
+        // note converts into a thread once replied to). Foreign identities
+        // that all point elsewhere mean the thread already lives on another
+        // change (or forge).
+        let mut matches = foreign_ids.values().filter_map(|fid| on_change.get(fid).copied());
+        let onto = matches.clone().find(|foreign| !foreign.is_pr_level).or_else(|| matches.next());
         let (target, foreign_resolved) = match (onto, foreign_ids.is_empty()) {
             (Some(foreign), _) => {
                 (Target::Existing { foreign_thread: foreign.id.clone() }, foreign.is_resolved)
