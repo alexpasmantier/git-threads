@@ -653,55 +653,59 @@ fn create_discussion(
     body: &str,
 ) -> Result<CreatedDiscussion> {
     let endpoint = format!("projects/{project}/merge_requests/{}/discussions", mr.iid);
-    let body_field = format!("body={body}");
-    let mut args: Vec<String> =
-        vec!["api".into(), "--method".into(), "POST".into(), endpoint, "-f".into(), body_field];
-    let mut field = |key: &str, value: String| {
-        args.push("-f".into());
-        args.push(format!("position[{key}]={value}"));
+    // Context (unchanged) lines must carry both coordinates, added lines
+    // only the new one — GitLab rejects anything else with a 400.
+    let old_line = match position {
+        Position::Line { path, side: Side::New, lines } => {
+            old_line_of(workdir, &mr.diff_refs.base_sha, &mr.diff_refs.head_sha, path, lines.end)?
+        }
+        _ => None,
+    };
+    let payload = discussion_payload(&mr.diff_refs, position, old_line, body);
+    serde_json::from_str(&glab_json(workdir, "POST", &endpoint, &payload)?)
+        .context("unexpected glab api output for a created discussion")
+}
+
+/// The create-discussion payload. GitLab wants `position` as a nested JSON
+/// object — flat `position[key]` form fields are silently ignored and would
+/// demote the thread to a positionless discussion.
+fn discussion_payload(
+    diff_refs: &MrDiffRefs,
+    position: &Position,
+    old_line: Option<u32>,
+    body: &str,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({ "body": body });
+    let base = |position_type: &str, path: &str| {
+        serde_json::json!({
+            "position_type": position_type,
+            "base_sha": diff_refs.base_sha,
+            "start_sha": diff_refs.start_sha,
+            "head_sha": diff_refs.head_sha,
+            "old_path": path,
+            "new_path": path,
+        })
     };
     match position {
         Position::Line { path, side, lines } => {
-            field("position_type", "text".into());
-            field("base_sha", mr.diff_refs.base_sha.clone());
-            field("start_sha", mr.diff_refs.start_sha.clone());
-            field("head_sha", mr.diff_refs.head_sha.clone());
-            field("old_path", path.clone());
-            field("new_path", path.clone());
+            let mut pos = base("text", path);
             // Multi-line ranges need GitLab's hashed line codes; v1 pins the
             // range's last line, which is where the conversation reads best.
             match side {
-                Side::Old => field("old_line", lines.end.to_string()),
+                Side::Old => pos["old_line"] = lines.end.into(),
                 Side::New => {
-                    field("new_line", lines.end.to_string());
-                    // Context (unchanged) lines must carry both coordinates,
-                    // added lines only the new one — GitLab rejects anything
-                    // else with a 400.
-                    if let Some(old) = old_line_of(
-                        workdir,
-                        &mr.diff_refs.base_sha,
-                        &mr.diff_refs.head_sha,
-                        path,
-                        lines.end,
-                    )? {
-                        field("old_line", old.to_string());
+                    pos["new_line"] = lines.end.into();
+                    if let Some(old) = old_line {
+                        pos["old_line"] = old.into();
                     }
                 }
             }
+            payload["position"] = pos;
         }
-        Position::File { path } => {
-            field("position_type", "file".into());
-            field("base_sha", mr.diff_refs.base_sha.clone());
-            field("start_sha", mr.diff_refs.start_sha.clone());
-            field("head_sha", mr.diff_refs.head_sha.clone());
-            field("old_path", path.clone());
-            field("new_path", path.clone());
-        }
+        Position::File { path } => payload["position"] = base("file", path),
         Position::ChangeLevel { .. } => {} // positionless: a plain, still resolvable, discussion
     }
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    serde_json::from_str(&glab(workdir, &args)?)
-        .context("unexpected glab api output for a created discussion")
+    payload
 }
 
 fn add_note(
@@ -961,6 +965,48 @@ fn glab(workdir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// A request with a literal JSON body (`--input -`): `glab api` sends
+/// `-f` fields flat and does not nest bracketed keys, so structured
+/// payloads have to go through stdin.
+fn glab_json(
+    workdir: &Path,
+    method: &str,
+    endpoint: &str,
+    payload: &serde_json::Value,
+) -> Result<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("glab")
+        .current_dir(workdir)
+        // glab does not infer the content type for --input bodies.
+        .args([
+            "api",
+            "--method",
+            method,
+            endpoint,
+            "--input",
+            "-",
+            "-H",
+            "Content-Type: application/json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to run glab (is the GitLab CLI installed?)")?;
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(payload.to_string().as_bytes())
+        .context("failed to write the request body to glab")?;
+    let output = child.wait_with_output().context("failed to run glab")?;
+    if !output.status.success() {
+        bail!("glab api {endpoint} failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{gitlab_slug, hunk_pairs, normalize_ts, parse_spec};
@@ -1009,5 +1055,47 @@ mod tests {
     fn hunk_pairs_read_both_sides() {
         let diff = "@@ -10,2 +10,5 @@ fn x()\n@@ -20 +23,0 @@\n";
         assert_eq!(hunk_pairs(diff), vec![((10, 2), (10, 5)), ((20, 1), (23, 0))]);
+    }
+
+    #[test]
+    fn discussion_payloads_nest_the_position() {
+        use crate::export::Position;
+        use git_threads_core::{LineRange, Side};
+        let diff_refs = super::MrDiffRefs {
+            base_sha: "b".repeat(40),
+            start_sha: "s".repeat(40),
+            head_sha: "h".repeat(40),
+        };
+        let line = Position::Line {
+            path: "README.md".into(),
+            side: Side::New,
+            lines: LineRange { start: 3, end: 5 },
+        };
+        // An added line carries only the new coordinate...
+        let payload = super::discussion_payload(&diff_refs, &line, None, "hi");
+        assert_eq!(payload["body"], "hi");
+        assert_eq!(payload["position"]["position_type"], "text");
+        assert_eq!(payload["position"]["new_line"], 5);
+        assert!(payload["position"].get("old_line").is_none());
+        assert_eq!(payload["position"]["base_sha"], diff_refs.base_sha);
+        // ...a context line both, an old-side line only the old one.
+        let payload = super::discussion_payload(&diff_refs, &line, Some(4), "hi");
+        assert_eq!(payload["position"]["old_line"], 4);
+        let old_side = Position::Line {
+            path: "README.md".into(),
+            side: Side::Old,
+            lines: LineRange { start: 3, end: 3 },
+        };
+        let payload = super::discussion_payload(&diff_refs, &old_side, None, "hi");
+        assert_eq!(payload["position"]["old_line"], 3);
+        assert!(payload["position"].get("new_line").is_none());
+        // Change-level: no position at all.
+        let payload = super::discussion_payload(
+            &diff_refs,
+            &Position::ChangeLevel { context: None },
+            None,
+            "hi",
+        );
+        assert!(payload.get("position").is_none());
     }
 }
