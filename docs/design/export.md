@@ -120,6 +120,11 @@ GitLab v1 simplifications (in `gitlab.rs`): multi-line ranges post at the range'
 notes (individual notes take no thread replies); positionless discussions are imported never,
 exported as change-level — but unlike GitHub's issue comments they stay resolvable threads.
 
+Resolutions of threads living as forge-level comment trails (GitHub issue comments, GitLab lone
+notes) are never planned: there is nothing to toggle, and a plan that can't act would re-fire on
+every export. They live in threads data only; the one-time note at creation (GitHub) is the only
+mention. Found by dogfooding a hand-crafted third-party thread onto a lone MR note.
+
 Attribution note, settled during implementation: "the exporter's own comment" is judged against
 the local git identity, not the forge token — no extra API scope needed, and a bot token
 exporting a team's threads attributes everyone, which is what you want.

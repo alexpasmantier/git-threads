@@ -574,23 +574,18 @@ fn export_thread(
                     if plan.posts.len() == 1 { "y" } else { "ies" }
                 );
             }
+            // The planner never plans a toggle for a lone-note trail, so a
+            // resolve here always has a discussion to act on.
             if let Some(action) = &plan.resolve {
-                if lone_note {
-                    eprintln!(
-                        "note: thread {} is resolved locally, but a lone MR comment has no resolution to toggle",
-                        short(&plan.thread)
-                    );
-                } else {
-                    pace.wait();
-                    toggle_resolve(workdir, project, mr.iid, foreign_thread, action.to)?;
-                    mirrors.push(export::resolve_mirror(me, action, "gitlab", foreign_thread)?);
-                    report.resolves += 1;
-                    println!(
-                        "thread {}: {} on the MR",
-                        short(&plan.thread),
-                        if action.to { "resolved" } else { "reopened" }
-                    );
-                }
+                pace.wait();
+                toggle_resolve(workdir, project, mr.iid, foreign_thread, action.to)?;
+                mirrors.push(export::resolve_mirror(me, action, "gitlab", foreign_thread)?);
+                report.resolves += 1;
+                println!(
+                    "thread {}: {} on the MR",
+                    short(&plan.thread),
+                    if action.to { "resolved" } else { "reopened" }
+                );
             }
         }
     }

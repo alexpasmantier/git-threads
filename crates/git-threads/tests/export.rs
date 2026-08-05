@@ -427,6 +427,34 @@ fn export_then_import_round_trips() {
 }
 
 #[test]
+fn resolutions_on_forge_level_trails_are_never_planned() {
+    let (dir, base, head) = setup_repo();
+    let store = Store::open(dir.path()).unwrap();
+    // A thread living as a PR-level comment trail (GitHub issue comment,
+    // GitLab lone note): resolution has no home there, ever — planning a
+    // toggle would re-fire on every subsequent export.
+    let root = comment(ME, "2026-01-01T10:00:00Z", "exported change-level earlier");
+    let root_id = root.id().unwrap();
+    let marker = mirror("2026-01-01T10:05:00Z", &root_id, "IC_1");
+    let resolution = resolve(ME, "2026-01-02T10:00:00Z", true);
+    write_thread(
+        &store,
+        anchor(dir.path(), &base, &head, "src/lib.rs", Some((10, 10))),
+        root,
+        vec![marker, resolution],
+    );
+
+    let mut trail = foreign("IC_1", false, &["IC_1"]);
+    trail.is_pr_level = true;
+    let plan = export::plan(&store, &change(&base, &head, vec![trail])).unwrap();
+    assert!(
+        plan.threads.is_empty(),
+        "nothing actionable must mean an empty plan: {:?}",
+        plan.threads
+    );
+}
+
+#[test]
 fn draft_threads_are_refused() {
     let (dir, base, head) = setup_repo();
     let store = Store::open(dir.path()).unwrap();
