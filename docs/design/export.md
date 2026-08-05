@@ -1,6 +1,8 @@
 # Exporting threads to a PR/MR
 
-Status: design agreed 2026-07-31, not implemented. Work is tracked in the plan at the bottom.
+Status: shipped 2026-08 — both forges implemented and live-dogfooded bidirectionally
+(this repo's PR #1 on GitHub; a private GitLab MR). The plan at the bottom is fully ticked;
+kept for the decisions and the v1 notes.
 
 ## Goal
 
