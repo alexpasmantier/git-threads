@@ -888,7 +888,18 @@ fn build_view(
 ) -> Result<ThreadView> {
     let at = cache.target();
     let unseen = unseen_ids(thread, seen, me);
-    let placement = cache.placement(store, effective_anchor(thread, folded))?;
+    let anchor = effective_anchor(thread, folded);
+    let placement = cache.placement(store, anchor)?;
+    // Second pass, post-cache (docs/design/worktree.md): at the checkout
+    // only, a dirty file's placement re-locates to the file on disk.
+    let at_checkout = store.repo().head_id().is_ok_and(|head| head.detach() == at);
+    let (placement, worktree) = match at_checkout
+        .then(|| reanchor::worktree_remap(store, anchor, at, &placement))
+        .flatten()
+    {
+        Some(remapped) => (remapped, true),
+        None => (placement, false),
+    };
     let (moved_to, moved_by) = match &folded.moved {
         Some((_, event)) => (event.anchor.clone(), Some(event.author.clone())),
         None => (None, None),
@@ -917,6 +928,7 @@ fn build_view(
         moved_by,
         at: GitOid::from_hex(at.to_string())?,
         placement,
+        worktree,
         messages,
     })
 }
@@ -1063,11 +1075,20 @@ pub fn anchor_context(
             }
         }
     }
-    if let Reanchor::Located { path, lines: Some(lines), .. } = &view.placement
-        && let Some(blob_id) = reanchor::blob_at(store.repo(), target, path)?
-    {
-        let content = reanchor::blob_content(store.repo(), blob_id)?;
-        return Ok(Some(AnchorContext::Excerpt { content, lines: *lines }));
+    if let Reanchor::Located { path, lines: Some(lines), .. } = &view.placement {
+        // The excerpt must agree with the `Current:` line above it: a
+        // worktree placement excerpts the file on disk.
+        let content = if view.worktree {
+            store.repo().workdir().and_then(|dir| std::fs::read_to_string(dir.join(path)).ok())
+        } else {
+            match reanchor::blob_at(store.repo(), target, path)? {
+                Some(blob_id) => Some(reanchor::blob_content(store.repo(), blob_id)?),
+                None => None,
+            }
+        };
+        if let Some(content) = content {
+            return Ok(Some(AnchorContext::Excerpt { content, lines: *lines }));
+        }
     }
     if let (Some(lines), Some(blob)) = (anchor.lines, &anchor.blob) {
         let blob_id = ObjectId::from_hex(blob.as_str().as_bytes())?;

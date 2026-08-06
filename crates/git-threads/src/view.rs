@@ -25,6 +25,11 @@ pub struct ThreadView {
     /// The commit the thread was re-anchored against.
     pub at: GitOid,
     pub placement: Reanchor,
+    /// The placement describes the file on disk, not `at`: the placed file
+    /// is dirty in the working tree and the lines were re-located there
+    /// (docs/design/worktree.md). Omitted from `--json` when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub worktree: bool,
     /// Comments and replies in display order, folded state applied.
     pub messages: Vec<MessageView>,
 }
