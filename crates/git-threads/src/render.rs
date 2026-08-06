@@ -57,22 +57,26 @@ pub fn thread(ui: Ui, store: &Store, view: &ThreadView, mode: SnippetMode) -> Re
         .unwrap();
     }
 
+    // A worktree placement points at the dirty file on disk, not `at`
+    // (docs/design/worktree.md); say so instead of naming the commit.
+    let place_at =
+        if view.worktree { ui.yellow("in the working tree") } else { format!("at {target_short}") };
     match &view.placement {
         Reanchor::WholeCommit => {}
         Reanchor::Located { path, lines, status } => {
             let exact = matches!(status, ReanchorStatus::Exact);
             let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
             let status = format!("({status})");
-            let status = if exact { ui.green(status) } else { ui.yellow(status) };
+            let status = if exact && !view.worktree { ui.green(status) } else { ui.yellow(status) };
             writeln!(
                 out,
-                "Current:  {} at {target_short} {status}",
+                "Current:  {} {place_at} {status}",
                 ui.bold(format_args!("{path}{lines}"))
             )
             .unwrap();
         }
         Reanchor::Outdated => {
-            writeln!(out, "Current:  {} at {target_short}", ui.red("no match")).unwrap();
+            writeln!(out, "Current:  {} {place_at}", ui.red("no match")).unwrap();
         }
     }
 
@@ -118,14 +122,19 @@ pub fn list_entry(
         Reanchor::WholeCommit => (location(&view.anchor, oneline), true, String::new()),
         Reanchor::Located { path, lines, status } => {
             let lines = lines.map(|l| format!(":{}-{}", l.start, l.end)).unwrap_or_default();
-            let note = match status {
-                ReanchorStatus::Exact => String::new(),
-                status => format!(" {}", ui.yellow(format_args!("({status})"))),
+            let note = match (status, view.worktree) {
+                (ReanchorStatus::Exact, false) => String::new(),
+                (ReanchorStatus::Exact, true) => format!(" {}", ui.yellow("(worktree)")),
+                (status, false) => format!(" {}", ui.yellow(format_args!("({status})"))),
+                (status, true) => {
+                    format!(" {}", ui.yellow(format_args!("({status}, worktree)")))
+                }
             };
             (format!("{path}{lines}"), false, note)
         }
         Reanchor::Outdated => {
-            (location(&view.anchor, oneline), true, format!(" {}", ui.red("(outdated)")))
+            let note = if view.worktree { "(outdated, worktree)" } else { "(outdated)" };
+            (location(&view.anchor, oneline), true, format!(" {}", ui.red(note)))
         }
     };
     // Only lines that couldn't be re-located need their diff spelled out.

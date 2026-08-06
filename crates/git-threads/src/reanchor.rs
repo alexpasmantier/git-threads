@@ -6,8 +6,8 @@
 use crate::store::Store;
 use anyhow::{Context, Result};
 use git_threads_core::{
-    Anchor, EventId, LineRange, ReanchorStatus, derive_snippet, locate_snippet_among,
-    to_canonical_json,
+    Anchor, EventId, LineRange, ReanchorStatus, derive_snippet, locate_snippet,
+    locate_snippet_among, to_canonical_json,
 };
 use gix::ObjectId;
 use std::collections::BTreeMap;
@@ -173,6 +173,46 @@ pub fn reanchor(store: &Store, anchor: &Anchor, target: ObjectId) -> Result<Rean
         });
     }
     Ok(Reanchor::Outdated)
+}
+
+/// Display-side second pass (docs/design/worktree.md): where a placement's
+/// lines sit in the working tree, when the placed file is dirty on disk.
+/// `None` means the commit placement stands: the file is clean (judged by
+/// lines, so checkout CRLF filters don't fake dirtiness), unreadable, or
+/// there are no lines to re-locate. The index is never consulted — the
+/// editor shows the disk, so locations map to the disk.
+pub fn worktree_remap(
+    store: &Store,
+    anchor: &Anchor,
+    target: ObjectId,
+    placement: &Reanchor,
+) -> Option<Reanchor> {
+    let Reanchor::Located { path, lines: Some(_), .. } = placement else { return None };
+    let repo = store.repo();
+    let disk = std::fs::read_to_string(repo.workdir()?.join(path)).ok()?;
+    let placed_blob = blob_at(repo, target, path).ok().flatten()?;
+    let placed = blob_content(repo, placed_blob).ok()?;
+    if disk.lines().eq(placed.lines()) {
+        return None;
+    }
+    // Same ladder, one candidate: blob identity against the anchored
+    // version, then its derived snippet in the disk content.
+    let anchor_blob = ObjectId::from_hex(anchor.blob.as_ref()?.as_str().as_bytes()).ok()?;
+    let anchor_content = blob_content(repo, anchor_blob).ok()?;
+    if disk.lines().eq(anchor_content.lines()) {
+        return Some(Reanchor::Located {
+            path: path.clone(),
+            lines: anchor.lines,
+            status: ReanchorStatus::Exact,
+        });
+    }
+    let snippet = derive_snippet(&anchor_content, anchor.lines?)?;
+    Some(match locate_snippet(&snippet, &disk) {
+        Some((lines, status)) => {
+            Reanchor::Located { path: path.clone(), lines: Some(lines), status }
+        }
+        None => Reanchor::Outdated,
+    })
 }
 
 /// The path `path` from `from` was renamed to in `to`, per `git diff -M`.

@@ -215,3 +215,54 @@ fn placements_are_cached_per_target_and_served_from_the_cache() {
     let mut cache = Cache::open(store.repo(), head);
     assert_eq!(cache.placement(&store, &anchor).unwrap(), fresh);
 }
+
+#[test]
+fn dirty_worktree_relocates_display() {
+    let (dir, store, id) = setup();
+    let path = dir.path();
+    let shifted = format!("// header\n// header\n\n{ORIGINAL}");
+
+    // Clean tree: commit coordinates, no worktree flag.
+    let view = commands::thread_view(&store, id.as_str(), "HEAD").unwrap();
+    assert!(!view.worktree);
+
+    // Uncommitted edit shifting the code down: the display follows the disk.
+    fs::write(path.join("code.rs"), &shifted).unwrap();
+    let view = commands::thread_view(&store, id.as_str(), "HEAD").unwrap();
+    assert!(view.worktree);
+    assert_eq!(
+        view.placement,
+        Reanchor::Located {
+            path: "code.rs".into(),
+            lines: Some(LineRange { start: 10, end: 12 }),
+            status: ReanchorStatus::Relocated,
+        }
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_git-threads"))
+        .current_dir(path)
+        .args(["list", "--oneline"])
+        .output()
+        .unwrap();
+    let oneline = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(oneline.contains("code.rs:10-12 (relocated, worktree)"), "{oneline}");
+
+    // The commented code rewritten away on disk: an honest no-match.
+    fs::write(path.join("code.rs"), ORIGINAL.replace("beta", "delta")).unwrap();
+    let view = commands::thread_view(&store, id.as_str(), "HEAD").unwrap();
+    assert!(view.worktree);
+    assert_eq!(view.placement, Reanchor::Outdated);
+
+    // Committing the edit heals it: the ladder takes over, no worktree flag.
+    fs::write(path.join("code.rs"), &shifted).unwrap();
+    commit_all(path, "shift down");
+    let view = commands::thread_view(&store, id.as_str(), "HEAD").unwrap();
+    assert!(!view.worktree);
+    assert_eq!(
+        view.placement,
+        Reanchor::Located {
+            path: "code.rs".into(),
+            lines: Some(LineRange { start: 10, end: 12 }),
+            status: ReanchorStatus::Relocated,
+        }
+    );
+}
